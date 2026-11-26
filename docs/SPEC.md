@@ -293,8 +293,8 @@ ignored and replaced by defaults; every value is range-checked on load.
 
 ## Open questions
 
-- The CPU cost of 23 models plus effects in the audio ISR: measured in milestone 2; a cap on sounding tracks if
-  needed.
+- The CPU cost of the effects on top of the full model (41 % peak measured in milestone 2): a cap on sounding tracks
+  only if the effects push the peak towards 80 %.
 - MUTE / SOLO in STEP mode: EDIT + E5 / F5 (above) may feel awkward; revisit once it is played.
 - The encoders have no push switches (settled in the build): mute is on MUTE + pad and the TRACK page; tempo moves
   in whole BPM.
@@ -330,7 +330,9 @@ Each can be tested on the host and heard in the emulator.
    (`tests/shakers_test.c`: every instrument and case passes; the comparison found STK's swapped CC 4 / 11 and an
    overflow in the ratchet). Cost: the audio ISR's static cost 19302 (the skeleton's 2211: a loop over up to seven
    resonances inside the sample loop); the emulator renders the worst case at 92× real time (the skeleton 319×).
-   To measure on the unit (the CPU meter): the voice cap only if the peak nears 80 %.
+   On the unit (2026-11-26): CPU PEAK 41 % at most (a busy sequence with the coins and the chimes, and a forearm
+   across all the pads while it runs), no late half, everything sounds right. No voice cap needed; ~40 % of the
+   audio ISR is left for the effects (milestone 9).
 3. **Sound tuning:** levels balanced across the 23, per-track level and pan, energy-from-velocity, accent law; by ear
    in the emulator and on the unit.
 4. **The step sequencer:** 16 steps × 23 tracks, trigs, accent, the clock, PLAY / STOP, track selection, the grid's
