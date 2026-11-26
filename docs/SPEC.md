@@ -307,7 +307,9 @@ Each can be tested on the host and heard in the emulator.
    edited, shown and stored (played from milestone 5); patterns, kits, songs and settings saved and loaded.
    Measured: image 129 KB of 582 KB, RAM 7.5 KB of 50 KB, pool 111 KB of 391 KB; the audio ISR's static cost 2211
    (the start app's 867); the emulator renders the worst case (all 23 pads re-hit every ~23 ms) at ~300× real time.
-   Not yet measured on a unit (`audio_cpu_q8`).
+   On the unit (2026-11-26): the sequence plays, levels even, tempo steady, no crackles; the CPU meter (added after
+   the first install) reads ~10..15 % both with a sequence running and with a forearm across all the pads while it
+   runs. That is the baseline for milestone 2's full model.
 2. **The Shakers port:** all 23 instruments from STK's tables, the four parameters on the knobs, checked against STK
    built on the host (spectrum, decay, level per instrument); measured CPU cost; the voice cap if needed.
 3. **Sound tuning:** levels balanced across the 23, per-track level and pan, energy-from-velocity, accent law; by ear
