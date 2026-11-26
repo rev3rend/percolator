@@ -434,6 +434,41 @@ static void screens(void)
     check("REC: on, its LED lit", ui.rec && snd.rec && host_led[panel.btn[B_REC]]);
     press(B_REC);
 
+    {   /* the CPU meter: the platform's average and worst half into GLOBAL 2 and HOME's header bar */
+        audio_cpu_q8 = 128;                      /* 50 % */
+        audio_max_us = CPU_HALF_US * 9u / 10u;   /* one half at 90 % */
+        frames(8);
+        audio_max_us = CPU_HALF_US / 5u;         /* later halves lighter: the peak is held */
+        frames(8);
+        check("CPU meter: the average (50 %) and the worst half held (90 %)", cpu_now == 50u && cpu_peak == 90u);
+        check("CPU meter: hot, so the header bar is red", px(10, G_TOP - 2) == T_REC && px(200, G_TOP - 2) != T_REC);
+        shot("home_cpu_hot");
+        frames(2u * CPU_WIN_MS / 16u + 10u);     /* two windows later: the 90 % has gone */
+        check("CPU meter: the peak falls back after its window", cpu_peak == 50u || cpu_peak == 20u);
+        audio_cpu_q8 = 51;                       /* 20 % */
+        frames(10);
+        check("CPU meter: cool, the bar in the accent", px(10, G_TOP - 2) == T_ACCENT);
+        press(B_GLO);
+        press(B_GLO);
+        check("GLO twice: GLOBAL 2 with the CPU rows", ui.page == PG_GLO2);
+        host_turn(EN_K3, 30);
+        host_turn(EN_K4, -30);
+        host_frame();
+        check("CPU rows: read-only (the knobs change nothing)", cpu_now == 20u);
+        felucca_dbg.late += 999999u;             /* glitches: the widest text */
+        audio_cpu_q8 = 256;
+        audio_max_us = CPU_HALF_US * 2u;
+        frames(10);
+        check("CPU meter: LATE counted, values capped at 100", cpu_late == 999999u && cpu_now == 100u && cpu_peak == 100u);
+        shot("page_global2_cpu");
+        lint("GLOBAL 2 with the CPU at its widest");
+        felucca_dbg.late = 0;
+        ui.cpu_late0 = 0;
+        audio_cpu_q8 = 0;
+        audio_max_us = 0;
+        press(B_HOME);
+        frames(2u * CPU_WIN_MS / 16u + 10u);
+    }
     memset(host_fb, 0, sizeof host_fb);          /* the platform drew over the screen (UBOOT countdown) */
     app_redraw = 1;
     host_frame();

@@ -156,6 +156,8 @@ static void host_nor_erase(void) { memset(nor, 0xFF, sizeof nor); }
 
 /* ------------------------------------------------------------ audio --- */
 static volatile uint32_t audio_cpu_q8;   /* (audio.c on the target; the host's renders cost nothing here) */
+static volatile uint32_t audio_max_us;   /* (audio.c: the worst half's render time; a test sets it) */
+static struct { uint32_t late; } felucca_dbg;   /* (audio.c: halves the DMA overtook, i.e. audible glitches) */
 #include "app.h"
 #include "app.c"
 

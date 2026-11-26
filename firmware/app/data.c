@@ -338,7 +338,13 @@ static void data_load(void)      /* power-on: settings, the 16 patterns, the 4 k
 }
 
 /* ------------------------------------------------------ page parameters --- */
-enum { K_NUM, K_PCT, K_PAN, K_LIST, K_BPM2, K_OFF50, K_STEPS, K_CH, K_NOTE, K_ONOFF, K_MS };
+enum { K_NUM, K_PCT, K_PAN, K_LIST, K_BPM2, K_OFF50, K_STEPS, K_CH, K_NOTE, K_ONOFF, K_MS, K_LOAD, K_PEAK };
+#define K_READONLY(k) ((k) >= K_LOAD)     /* measured, shown on a page, not set by its knob */
+
+/* the CPU meter (ui.c cpu_update): the audio ISR's load, % of its 2.9 ms half */
+static uint8_t cpu_now;          /* the platform's average (audio_cpu_q8, ~93 ms) */
+static uint8_t cpu_peak;         /* the worst single half in the last 2..4 s (audio_max_us) */
+static uint32_t cpu_late;        /* halves that missed their deadline since power-on (felucca_dbg.late): glitches */
 typedef struct {
     const char *name;            /* 0: an empty row */
     int16_t lo, hi;
@@ -370,7 +376,8 @@ static const param_t PP[NPAGES][4] = {
      {"DRIVE", 0, 100, K_PCT, 0, 0}, {"MASTER", 0, 100, K_NUM, 1, 0}},
     {{"MIDI CHANNEL", 0, 16, K_CH, 1, 0}, {"BASE NOTE", 24, 104, K_NOTE, 1, 0},
      {"CLOCK", 0, 2, K_LIST, 0, CLOCK_NAME}, {"TRS MIDI IN", 0, 1, K_ONOFF, 1, 0}},
-    {{"CLOCK OUT", 0, 1, K_ONOFF, 0, 0}, {"NOTES OUT", 0, 1, K_ONOFF, 1, 0}, {0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}},
+    {{"CLOCK OUT", 0, 1, K_ONOFF, 0, 0}, {"NOTES OUT", 0, 1, K_ONOFF, 1, 0},
+     {"CPU LOAD", 0, 100, K_LOAD, 1, 0}, {"CPU PEAK", 0, 100, K_PEAK, 1, 0}},
 };
 
 static uint8_t mute_tmp, solo_tmp;               /* TRACK 2's MUTE / SOLO rows edit the pattern's flags through these */
@@ -401,7 +408,7 @@ static void *pv_ptr(uint32_t page, uint32_t row, uint32_t t, int *wide)
     case PG_FX2: return &kit.fx[FX_RSIZE + row];
     case PG_FX3: return &kit.fx[FX_FILT + row];
     case PG_GLO: return row == 0 ? &set.midi_ch : row == 1 ? &set.base_note : row == 2 ? &set.clock : &set.trs_in;
-    case PG_GLO2: return row == 0 ? &set.clock_out : row == 1 ? &set.notes_out : 0;
+    case PG_GLO2: return row == 0 ? &set.clock_out : row == 1 ? &set.notes_out : row == 2 ? &cpu_now : &cpu_peak;
     }
     return 0;
 }
@@ -426,7 +433,7 @@ static void pv_set(uint32_t page, uint32_t row, uint32_t t, int32_t v)   /* clam
     int wide;
     const param_t *q = &PP[page][row];
     void *p = pv_ptr(page, row, t, &wide);
-    if (!p || !q->name)
+    if (!p || !q->name || K_READONLY(q->kind))
         return;
     v = v < q->lo ? q->lo : v > q->hi ? q->hi : v;
     if (page == PG_TRACK2 && row >= 2) {
@@ -485,6 +492,17 @@ static void pv_text(char *b, unsigned max, const param_t *q, int32_t v)   /* a v
     case K_NOTE: note_name(b, max, (uint32_t)v); break;
     case K_ONOFF: str_cpy(b, v ? "ON" : "OFF", max); break;
     case K_MS: fmt_int(t, v); str_cpy(b, t, max); cat(b, " MS", max); break;
+    case K_LOAD: fmt_int(t, v); str_cpy(b, t, max); cat(b, "%", max); break;
+    case K_PEAK:
+        fmt_int(t, v);
+        str_cpy(b, t, max);
+        cat(b, "%", max);
+        if (cpu_late) {                          /* a glitch happened: say how many */
+            cat(b, "  LATE ", max);
+            fmt_int(t, (int32_t)(cpu_late > 999u ? 999u : cpu_late));
+            cat(b, t, max);
+        }
+        break;
     default: fmt_int(b, v); break;
     }
 }

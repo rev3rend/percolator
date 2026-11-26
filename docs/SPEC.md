@@ -162,8 +162,13 @@ DRIVE, MASTER level.
 
 ### GLOBAL page (GLO)
 
-MIDI channel (1..16, OMNI), base note (default 53 = F3), CLOCK source (INT / EXT / AUTO), CLOCK OUT (on / off),
-NOTES OUT (on / off), TRS MIDI IN (on / off, default on), screen-reader status.
+MIDI channel (1..16, OMNI), base note (default 53 = F3), CLOCK source (INT / EXT / AUTO), TRS MIDI IN (on / off,
+default on); GLOBAL 2: CLOCK OUT (on / off), NOTES OUT (on / off), and the CPU meter (read-only rows): CPU LOAD, the
+audio ISR's average share of its 2.9 ms half (the platform's `audio_cpu_q8`, ~93 ms), and CPU PEAK, the worst single
+half in the last 2..4 s (`audio_max_us`: what decides a crackle), with LATE n when halves have missed their deadline
+since power-on (`felucca_dbg.late`: audible glitches). HOME's header rule is the same meter, always visible: the
+average as a fill, the peak as a tick, cyan, red from 80 % or after a late half. (The emulator shows 0: it does not
+measure; the screen-reader status comes with milestone 10.)
 
 ### SAVE
 

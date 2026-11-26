@@ -19,6 +19,10 @@
 #define FLASH_MS 90u             /* a track's mark stays lit this long after a hit */
 #define CONFIRM_MS 2500u         /* EDIT + SAVE twice within this clears the track */
 #define SPLASH_MS 1200u          /* the name and version at power-on */
+#define CPU_EVERY_MS 100u        /* the CPU meter's numbers change at most this often */
+#define CPU_WIN_MS 2000u         /* the peak: the worst half of this window and the one before */
+#define CPU_HALF_US ((uint32_t)HALF_FRAMES * 1000000u / FS)   /* 2902 us: the time an audio half may take */
+#define CPU_HOT 80u              /* % above which the meter turns red */
 
 /* the GRID's geometry */
 #define G_TOP 22
@@ -59,6 +63,8 @@ static struct {
     uint32_t flash_until[NT];
     uint32_t frames;
     uint32_t splash_until;
+    uint32_t cpu_next, cpu_win_end, cpu_late0;
+    uint8_t cpu_win, cpu_prev;   /* the worst half (%) of this window and of the one before */
 } ui;
 
 static void msg(const char *s)
@@ -217,7 +223,7 @@ static void draw_head(void)                      /* HOME's top line: pattern, qu
 {
     char b[40], t[12];
     int32_t x, left, gap;
-    cv_begin(240, G_TOP, T_BG);
+    cv_begin(240, G_TOP - 2, T_BG);
     label2(b, sizeof b, 'P', pat_index() + 1u);
     left = x = cv_text(6, 2, &AF_M, b, T_THEME);
     if (ui.queued) {
@@ -250,8 +256,45 @@ static void draw_head(void)                      /* HOME's top line: pattern, qu
     }
     if (b[0])
         cv_text_in(left + 4, 4, x - left - 4, &AF_S, b, T_TEXT, T_BG);
-    cv_rect(0, G_TOP - 1, 240, 1, T_LINE);
     cv_blit(0, 0);
+}
+
+/* the CPU meter under HOME's header (its 2 px rule): the average as a fill, the peak as a tick; red when hot */
+static void draw_cpu_bar(void)
+{
+    int32_t w = 240 * cpu_now / 100, pk = 240 * cpu_peak / 100;
+    uint16_t c = cpu_peak >= CPU_HOT || cpu_late ? T_REC : T_ACCENT;
+    cv_begin(240, 2, T_BG);
+    cv_rect(0, 1, 240, 1, T_LINE);
+    if (w > 0)
+        cv_rect(0, 0, w, 2, c);
+    if (pk > 0)
+        cv_rect(pk > 238 ? 238 : pk, 0, 2, 2, cpu_peak >= CPU_HOT ? T_REC : T_TEXT);
+    cv_blit(0, G_TOP - 2);
+}
+
+static void cpu_update(void)                     /* every frame: the platform's measurements into the meter */
+{
+    uint32_t us = audio_max_us, pk;
+    audio_max_us = 0;                            /* (only the ISR raises it: a raise lost to this reset is one frame) */
+    pk = (us * 100u + CPU_HALF_US / 2u) / CPU_HALF_US;     /* (rounded) */
+    pk = pk > 100u ? 100u : pk;
+    ui.cpu_win = (uint8_t)(pk > ui.cpu_win ? pk : ui.cpu_win);
+    if ((int32_t)(fm1_ms - ui.cpu_win_end) >= 0) {
+        ui.cpu_prev = ui.cpu_win;
+        ui.cpu_win = 0;
+        ui.cpu_win_end = fm1_ms + CPU_WIN_MS;
+    }
+    if ((int32_t)(fm1_ms - ui.cpu_next) < 0)
+        return;
+    ui.cpu_next = fm1_ms + CPU_EVERY_MS;
+    {
+        uint32_t now = (audio_cpu_q8 * 100u + 128u) / 256u;
+        cpu_now = (uint8_t)(now > 100u ? 100u : now);
+    }
+    cpu_peak = ui.cpu_win > ui.cpu_prev ? ui.cpu_win : ui.cpu_prev;
+    cpu_peak = cpu_peak < cpu_now ? cpu_now : cpu_peak;
+    cpu_late = felucca_dbg.late - ui.cpu_late0;
 }
 
 static uint32_t solo_any(void)
@@ -765,6 +808,10 @@ static void ui_draw(void)
     if (h != ui.sig[0])
         draw_head();
     ui.sig[0] = h;
+    h = fnv(fnv(fnv(FNV0, cpu_now), cpu_peak), cpu_late != 0u);
+    if (h != ui.sig[14])
+        draw_cpu_bar();
+    ui.sig[14] = h;
     h = fnv_s(fnv(sel(), kit.t[sel()].p[0] | kit.t[sel()].p[1] << 8 | kit.t[sel()].p[2] << 16 |
                              (uint32_t)kit.t[sel()].p[3] << 24), m);
     h = fnv(h, track_state(sel()));
@@ -918,7 +965,7 @@ static void ui_encoders(void)
         } else {
             uint32_t r = role - EN_K1;
             const param_t *p = &PP[ui.page][r];
-            if (!p->name)
+            if (!p->name || K_READONLY(p->kind))
                 continue;
             pv_set(ui.page, r, sel(), pv_get(ui.page, r, sel()) + (p->kind == K_BPM2 ? 2 * s : s));
             if (ui.page == PG_TIME || ui.page == PG_RANDOM || ui.page == PG_GLO || ui.page == PG_GLO2)
@@ -1188,6 +1235,7 @@ static void ui_init(void)
     snd.sel = (uint8_t)sel();
     snd.pad_mask = PAD_MASK;
     ui.splash_until = fm1_ms + SPLASH_MS;
+    ui.cpu_late0 = felucca_dbg.late;             /* (.noinit: it counts across resets; the meter counts from here) */
 }
 
 static void ui_frame(void)
@@ -1201,6 +1249,7 @@ static void ui_frame(void)
     ui_keys();
     ui_encoders();
     ui_master();
+    cpu_update();
     ui_leds();
     ui_draw();
 }
