@@ -18,6 +18,8 @@
 # APP (firmware/app/; change these with the app):
 #   app          the app on the host platform: screens, layout lint, LEDs, its record in flash, sound, MIDI
 #                (app_test.c; build/shots/)
+#   shakers      the Shakers engine against STK's own Shakers built from tests/stk/ (shakers_ref.cpp renders STK,
+#                shakers_test.c compares every instrument: centroid, decay, level)
 # WEB:
 #   installer    fm1pkg.js / fm1ota.js against Python and a simulated FM-1, the page assembled (web/test_web.mjs)
 #   emulator     the app to WebAssembly (web/emu/build.sh) and driven without a browser (web/emu/emu_test.mjs)
@@ -67,6 +69,17 @@ run "ISR budget: target cost of the audio and scan ISRs (pi32v2 disassembly)" py
 # shellcheck disable=SC2086
 $CC $APP_FLAGS -o "$OUT/app_test" tests/app_test.c -lm
 run "app: screens, layout, LEDs, its record in flash, sound, MIDI (build/shots/)" "$OUT/app_test"
+CXX="${CXX:-c++}"
+if command -v "${CXX%% *}" >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    $CXX -O2 -w -Itests/stk -Itests -o "$OUT/shakers_ref" tests/shakers_ref.cpp tests/stk/Shakers.cpp tests/stk/Stk.cpp &&
+        "$OUT/shakers_ref" > "$OUT/stk_ref.txt" || fail=1
+    # shellcheck disable=SC2086
+    $CC $APP_FLAGS -o "$OUT/shakers_test" tests/shakers_test.c -lm
+    run "shakers: the engine against STK's own Shakers (tests/stk/)" "$OUT/shakers_test" "$OUT/stk_ref.txt"
+else
+    echo "== skip shakers (no C++ compiler: CXX)"
+fi
 
 # ---------------------------------------------------------------- sanitizers
 SAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g"

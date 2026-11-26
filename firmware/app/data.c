@@ -11,7 +11,7 @@
  * SAVE writes the one shown to flash. All-zero is a valid empty pattern: length 0 reads as 16, divide 0 as 1/1, tempo 0 as 120 BPM, a step of zeros is
  * off with no locks, probability 100 % and no nudge. */
 
-#include "shakers.h"             /* build/gen: tools/gen_shakers.py (STK's Shakers data, fixed point) */
+#include "shk_tables.h"          /* build/gen: tools/gen_shakers.py (STK's Shakers data, fixed point) */
 
 #define NT 23u                   /* tracks: STK Shakers types 0..22, played by keys 0..22 (F3..D#5) */
 #define NSTEP 16u
@@ -31,7 +31,7 @@
 #define BLACK_KEYS 0x0252A52Au   /* bit k: key k is black (k % 12 in 1 3 5 8 10: F#3 G#3 A#3 C#4 D#4 ... F#5) */
 _Static_assert(NT == SK_N, "a track per STK Shakers instrument");
 
-enum { SP_EN, SP_DEC, SP_OBJ, SP_FRQ };          /* the four Shakers parameters (STK CC 2, 4, 11, 1) */
+enum { SP_EN, SP_DEC, SP_OBJ, SP_FRQ };          /* the four Shakers parameters (STK's code: CC 2, 11, 4, 1) */
 static const char *const SP_NAME[4] = {"ENERGY", "DECAY", "OBJECTS", "FREQ"};
 static const char SP_LETTER[4] = {'E', 'D', 'O', 'F'};
 

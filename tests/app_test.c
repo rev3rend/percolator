@@ -671,12 +671,12 @@ static void sound(void)
     ring_out();
     track_select(6);
     host_frame();
-    host_midi(0xB0, 2, 11);
-    host_midi(0xB0, 4, 22);
-    host_midi(0xB0, 11, 33);
+    host_midi(0xB0, 2, 11);                      /* STK's code: 2 energy, 11 decay, 4 objects, 1 frequency */
+    host_midi(0xB0, 11, 22);
+    host_midi(0xB0, 4, 33);
     host_midi(0xB0, 1, 44);
     host_render(buf, 64);
-    check("CC 2 / 4 / 11 / 1: the selected track's four parameters", kit.t[6].p[0] == 11u && kit.t[6].p[1] == 22u &&
+    check("CC 2 / 11 / 4 / 1: the selected track's four parameters", kit.t[6].p[0] == 11u && kit.t[6].p[1] == 22u &&
                                                                       kit.t[6].p[2] == 33u && kit.t[6].p[3] == 44u);
     kit.t[6].p[0] = 100;
     kit.t[6].p[1] = kit.t[6].p[2] = kit.t[6].p[3] = 64;

@@ -2,20 +2,28 @@
  * Copyright (C) 2026 R. Luke DuBois */
 /* The audio ISR: 23 Shakers voices, the pads, MIDI in and notes out, and the step clock.
  *
- * The voice is STK's PhISEM (Perry Cook; STK Shakers.cpp, Perry R. Cook and Gary P. Scavone, MIT-style licence) in
- * fixed point, as far as the skeleton goes: a hit adds 0.1 x amplitude to the shake energy (capped at 1, as STK's
- * noteOn); the energy decays by the system decay (here per 32-sample block, from SK_SD32); each sample a collision
- * happens with the chance nObjects / 1024 (SK_THR), adds the energy to the sound level and excites the resonator with
- * it; the sound level decays by the sound decay; the first resonance (SK_A1, SK_A2) and STK's three-tap equalizer
- * shape it. The four parameters index the generated tables directly, so a knob or a MIDI CC needs no recomputation.
- * Not yet (milestone 2): the other resonances, the frequency variation, the ratchet (Guiro, Wrench), the sweeping
- * drops (Water) and the one-tube-per-collision chimes. One deliberate difference from STK: STK stops ticking the
- * resonators when the energy falls below 0.001, which cuts a ringing coin; here they ring out and the voice goes idle
- * only when everything is near zero (then its state is zeroed: exact silence, no limit cycle).
+ * The voice is STK's Shakers (Perry Cook's PhISEM; STK Shakers.cpp, Perry R. Cook and Gary P. Scavone, MIT-style
+ * licence) in fixed point, every part of it: a hit adds 0.1 x amplitude to the shake energy (capped at 1, as STK's
+ * noteOn); the energy decays by the system decay (per 32-sample block, SK_SD32); each sample a collision happens with
+ * the chance nObjects / 1024 (SK_THR), adds the energy to the sound level and excites the resonances with it, each
+ * through its gain x currentGain (SK_CG); the varying resonances (Tambourine's jingles, Sleigh Bells, Bamboo, the
+ * Rocks) take a new random frequency at each collision; Tuned Bamboo Chimes excite one tube (of seven) per collision;
+ * the sound level decays by the sound decay; the resonances' sum goes through STK's three-tap equalizer. Guiro and
+ * Wrench are STK's ratchet: each sweep the energy falls from 1 by a fixed step plus 0.2 %, collisions add energy^2,
+ * and the excitation is noise x level x energy. Water Drops: a drop (at a collision, chance nObjects / 32767) takes
+ * one of three resonances, at a random frequency around the second base frequency, which then sweeps upwards
+ * (x 1.0001 a sample) while its gain decays.
  *
- * Formats: energy and sound level Q24; the resonator state Q20 (gen_shakers.py checks the headroom); coefficients
- * Q29, the feedback rounded towards zero (a floor leaves a DC limit cycle in the low resonances: Crunch, Water); out
- * Q15 through SK_OUTG. The step clock counts samples: phase += BPM x 2 per sample, a 16th every FS x 30.
+ * Where the port departs from STK on purpose (docs/SPEC.md "Sound"): the resonators ring out instead of stopping
+ * when the energy falls below 0.001 (no click); FREQ also moves the varied and the sweeping frequencies (STK resets
+ * them to the base frequencies, undoing the control); every Water hit starts with a drop (in STK two hits in three
+ * are silent); Guiro and Wrench: DECAY sets the scrape (1..8 sweeps a hit) and the hit's amplitude scales it.
+ *
+ * Formats: energy and sound level Q24; the resonator states Q20 (gen_shakers.py checks the headroom in float);
+ * coefficients Q29 (a1 = -2 r cos w from SK_COS, interpolated; computed when FREQ changes, at a varying resonance's
+ * collision, every sample for a sweeping drop), the feedback rounded towards zero (a floor leaves a DC limit cycle in
+ * the low resonances); frequencies Hz in Q16; out Q15 through SK_OUTG. The four parameters index the generated tables
+ * directly. The step clock counts samples: phase += BPM x 2 per sample, a 16th every FS x 30.
  *
  * Main loop -> ISR: volatile requests (run_req, stop_req, silence_req, pad_mask, rec, sel, next_req) taken at the start
  * of a block. ISR -> main loop: the published playhead, hit counters, the running flag, the swapped pattern. The ISR
@@ -27,9 +35,19 @@
 #define STEP_UNITS ((uint32_t)FS * 30u)          /* phase units per 16th (phase += BPM x 2 per sample) */
 #define NOTE_OFF_BLOCKS 64u      /* notes out: the note-off ~46 ms after the note-on */
 
+#define RATCHET_MAX 32           /* sweeps queued at most (hits pile up while a scrape runs) */
+#define FQ_NONE 0xFFu            /* voice_t.fq: the coefficients are not computed yet */
 typedef struct {
-    int32_t e, lvl, y1, y2;      /* energy, sound level (Q24); resonator outputs (Q20) */
-    uint32_t seed;               /* the collision dice (an LCG per voice) */
+    int32_t e, lvl;              /* energy, sound level (Q24); the ratchet's energy is e too */
+    int32_t y1[SK_MAXRES], y2[SK_MAXRES];   /* the resonances' outputs (Q20) */
+    int32_t a1[SK_MAXRES];       /* their -2 r cos w now (Q29) */
+    int32_t s1, s2;              /* the sum's last two samples (the equalizer) */
+    uint32_t wf[3];              /* Water: the drops' frequencies (Hz Q16) */
+    int32_t wg[3];               /* Water: the drops' gains (Q30, 0 = none) */
+    uint32_t seed;               /* the dice (an LCG per voice) */
+    int16_t count;               /* the ratchet: sweeps left */
+    uint16_t ramp;               /* the ratchet: the scrape's amplitude x 256 */
+    uint8_t fq;                  /* the FREQ the coefficients were computed for (FQ_NONE: not yet) */
 } voice_t;
 
 static struct {
@@ -61,18 +79,89 @@ static struct {
     volatile uint8_t last_midi;     /* the last MIDI note-on received, 0 = none */
 } snd = {.master_q8 = 256};
 
+static void voice_silence(uint32_t t)            /* everything back to zero (the dice and the coefficients stay) */
+{
+    voice_t *v = &snd.v[t];
+    uint32_t k;
+    v->e = v->lvl = v->s1 = v->s2 = 0;
+    for (k = 0; k < SK_MAXRES; k++)
+        v->y1[k] = v->y2[k] = 0;
+    for (k = 0; k < 3u; k++)
+        v->wg[k] = 0;
+    v->count = 0;
+    snd.active &= ~(1u << t);
+}
+
 static void snd_init(void)
 {
     uint32_t t;
-    for (t = 0; t < NT; t++)
+    for (t = 0; t < NT; t++) {
         snd.v[t].seed = 0x9E3779B9u * (t + 1u);
+        snd.v[t].fq = FQ_NONE;
+        voice_silence(t);
+    }
 }
 
-static void voice_silence(uint32_t t)
+/* -2 r cos(2 pi f / FS), Q29, for f in Hz Q16 and r in Q30: SK_COS (cos over 0..pi in 2048 steps) interpolated */
+static int32_t sk_a1(uint32_t f, int32_t r)
 {
-    voice_t *v = &snd.v[t];
-    v->e = v->lvl = v->y1 = v->y2 = 0;
-    snd.active &= ~(1u << t);
+    uint32_t pos = (uint32_t)(((uint64_t)f * 398915783u) >> 32), i;   /* f 4096 / FS, Q16 (398915783 = 2^32 x 4096 / FS) */
+    int32_t c;
+    if (pos >= (2048u << 16) - 1u)
+        pos = (2048u << 16) - 1u;
+    i = pos >> 16;
+    c = SK_COS[i] + (int32_t)(((int64_t)(SK_COS[i + 1u] - SK_COS[i]) * (int32_t)(pos & 0xFFFFu)) >> 16);
+    return -(int32_t)(((int64_t)r * c) >> 30);
+}
+
+static uint32_t sk_freq(uint32_t t, uint32_t k, uint32_t fq)   /* resonance k's frequency under FREQ fq, Hz Q16 */
+{
+    uint64_t f = (uint64_t)SK_RES[t][k].f * (uint32_t)SK_FSCALE[fq] >> 16;
+    return f > (uint64_t)(FS * 49 / 100) << 16 ? (uint32_t)(FS * 49 / 100) << 16 : (uint32_t)f;
+}
+
+static __attribute__((noinline)) void voice_coefs(uint32_t t, voice_t *v, uint32_t fq)   /* FREQ changed */
+{
+    uint32_t k, n = SK_NRES[t];
+    for (k = 0; k < n; k++)
+        v->a1[k] = sk_a1(sk_freq(t, k, fq), SK_RES[t][k].r);
+    v->fq = (uint8_t)fq;
+}
+
+static int32_t dice_noise(uint32_t *seed)        /* -32768 .. 32767: STK's noise() in Q15 */
+{
+    *seed = *seed * 1664525u + 1013904223u;
+    return (int32_t)(*seed >> 16) - 32768;
+}
+
+static __attribute__((noinline)) void voice_vary(uint32_t t, voice_t *v)   /* a collision: new random frequencies */
+{
+    uint32_t k, n = SK_NRES[t], fq = v->fq;
+    for (k = 0; k < n; k++)
+        if (SK_RES[t][k].vary) {
+            int32_t m = 65536 + (int32_t)(((int64_t)SK_VARY[t] * dice_noise(&v->seed)) >> 15);   /* 1 + vary x noise */
+            v->a1[k] = sk_a1((uint32_t)((uint64_t)sk_freq(t, k, fq) * (uint32_t)m >> 16), SK_RES[t][k].r);
+        }
+}
+
+static __attribute__((noinline)) void water_drop(uint32_t t, voice_t *v)   /* STK waterDrop's event */
+{
+    uint32_t j = (uint32_t)(((v->seed = v->seed * 1664525u + 1013904223u) >> 16) * 3u >> 16), k = 2;
+    uint32_t base = sk_freq(t, 1, v->fq);
+    static const int32_t CENTRE[3] = {49152, 65536, 81920};   /* 0.75, 1.0, 1.25 (Q16) */
+    v->lvl = v->e;
+    if (j == 0u && !v->wg[0])
+        k = 0;
+    else if (j == 1u && !v->wg[1])
+        k = 1;
+    else if (v->wg[2])
+        return;
+    {
+        int32_t m = CENTRE[k] + (dice_noise(&v->seed) >> 1);   /* + 0.25 x noise (Q16) */
+        int32_t g = dice_noise(&v->seed);
+        v->wf[k] = (uint32_t)((uint64_t)base * (uint32_t)m >> 16);
+        v->wg[k] = (g < 0 ? -g : g) << 15;                     /* |noise|, Q30 */
+    }
 }
 
 static void notes_out_flush(void)                /* every pending note-off now */
@@ -89,8 +178,18 @@ static void notes_out_flush(void)                /* every pending note-off now *
 static __attribute__((noinline)) void snd_hit(uint32_t t, uint32_t amp_q8)
 {
     voice_t *v = &snd.v[t];
-    int32_t e = v->e + (int32_t)((uint32_t)E_HIT_Q24 / 256u * amp_q8);
-    v->e = e > E_MAX_Q24 ? E_MAX_Q24 : e;
+    if (v->fq == FQ_NONE || v->fq != kit.t[t].p[SP_FRQ])
+        voice_coefs(t, v, kit.t[t].p[SP_FRQ]);
+    if (SK_KIND[t] == SK_RATCHET) {              /* a scrape: DECAY sets its sweeps, the amplitude its level */
+        int32_t c = v->count + 1 + kit.t[t].p[SP_DEC] * 7 / 127;
+        v->count = (int16_t)(c > RATCHET_MAX ? RATCHET_MAX : c);
+        v->ramp = (uint16_t)amp_q8;
+    } else {
+        int32_t e = v->e + (int32_t)((uint32_t)E_HIT_Q24 / 256u * amp_q8);
+        v->e = e > E_MAX_Q24 ? E_MAX_Q24 : e;
+        if (SK_KIND[t] == SK_WATER)
+            water_drop(t, v);                    /* every hit starts with a drop */
+    }
     snd.active |= 1u << t;
     snd.hits[t]++;
     if (set.notes_out) {
@@ -167,11 +266,11 @@ static __attribute__((noinline)) void snd_midi(uint32_t pkt, uint32_t src)
             snd_hit(d1 - set.base_note, d2 * 2u);
     } else if (st == 0xB0u) {
         uint32_t t = snd.sel < NT ? snd.sel : 0u;
-        if (d1 == 2u)
+        if (d1 == 2u)                            /* STK's code (not its comment): 11 decay, 4 objects */
             kit.t[t].p[SP_EN] = (uint8_t)d2;
-        else if (d1 == 4u)
-            kit.t[t].p[SP_DEC] = (uint8_t)d2;
         else if (d1 == 11u)
+            kit.t[t].p[SP_DEC] = (uint8_t)d2;
+        else if (d1 == 4u)
             kit.t[t].p[SP_OBJ] = (uint8_t)d2;
         else if (d1 == 1u)
             kit.t[t].p[SP_FRQ] = (uint8_t)d2;
@@ -180,44 +279,116 @@ static __attribute__((noinline)) void snd_midi(uint32_t pkt, uint32_t src)
     }
 }
 
+/* the resonances and the equalizer for one sample: x[k] the excitations (Q20, before each resonance's gain), the
+ * output in Q20. Rounded towards zero (a floor leaves a DC limit cycle) */
+static inline int32_t voice_res(voice_t *v, const sk_res_t *res, uint32_t n, const int32_t *x, int32_t e0, int32_t e1,
+                                int32_t e2)
+{
+    uint32_t k;
+    int32_t sum = 0, o;
+    for (k = 0; k < n; k++) {
+        int64_t acc = (int64_t)v->a1[k] * v->y1[k] + (int64_t)res[k].r2 * v->y2[k];
+        int32_t y = x[k] - (int32_t)((acc + (acc < 0 ? (1 << 29) - 1 : 0)) >> 29);
+        v->y2[k] = v->y1[k];
+        v->y1[k] = y;
+        sum += y;
+    }
+    o = e0 * sum + e1 * v->s1 + e2 * v->s2;
+    v->s2 = v->s1;
+    v->s1 = sum;
+    return o;
+}
+
+static int voice_quiet(const voice_t *v, uint32_t n)   /* every state near zero: the voice can go idle */
+{
+    uint32_t k;
+    if (v->lvl >= 64 || v->s1 >= 64 || v->s1 <= -64 || v->wg[0] || v->wg[1] || v->wg[2])
+        return 0;
+    for (k = 0; k < n; k++)
+        if (v->y1[k] >= 16 || v->y1[k] <= -16 || v->y2[k] >= 16 || v->y2[k] <= -16)
+            return 0;
+    return 1;
+}
+
 /* one voice into the mix: n samples, its gains Q15 */
 static void voice_render(uint32_t t, int32_t *mix, uint32_t n, int32_t gl, int32_t gr)
 {
     voice_t *v = &snd.v[t];
     const uint8_t *p = kit.t[t].p;
-    uint32_t thr = SK_THR[t][p[SP_OBJ]], seed = v->seed, i;
-    int32_t cg = (int32_t)SK_CG[t][p[SP_OBJ]], a1 = SK_A1[t][p[SP_FRQ]], a2 = SK_A2[t], snd_d = SK_SND[t];
-    int32_t e0 = SK_EQ[t][0], e1 = SK_EQ[t][1], e2 = SK_EQ[t][2], outg = SK_OUTG[t];
-    int32_t e = v->e, lvl = v->lvl, y1 = v->y1, y2 = v->y2;
-    int live = e >= SK_MIN_ENERGY_Q24;
-    if (live)                                    /* the system decay, once per block (SK_SD32 = decay^32) */
-        e = (int32_t)((int64_t)e * SK_SD32[t][p[SP_DEC]] >> 30);
+    const sk_res_t *res = SK_RES[t];
+    uint32_t kind = SK_KIND[t], nres = SK_NRES[t], thr = SK_THR[t][p[SP_OBJ]], i, k;
+    int32_t cg = (int32_t)SK_CG[t][p[SP_OBJ]], snd_d = SK_SND[t], outg = SK_OUTG[t];
+    int32_t e0 = SK_EQ[t][0], e1 = SK_EQ[t][1], e2 = SK_EQ[t][2], cgk[SK_MAXRES];
+    int live;
+    if (v->fq != p[SP_FRQ])
+        voice_coefs(t, v, p[SP_FRQ]);
+    for (k = 0; k < nres; k++)                   /* each resonance's gain x currentGain, Q16 */
+        cgk[k] = (int32_t)(((int64_t)cg * res[k].g) >> 16);
+    if (kind == SK_WATER)
+        thr >>= 5;                               /* rand(32767) < nObjects, not rand(1024) */
+    live = kind == SK_RATCHET ? v->count > 0 : v->e >= SK_MIN_ENERGY_Q24;
+    if (live && kind != SK_RATCHET)              /* the system decay, once per block (SK_SD32 = decay^32) */
+        v->e = (int32_t)((int64_t)v->e * SK_SD32[t][p[SP_DEC]] >> 30);
     for (i = 0; i < n; i++) {
-        int32_t x = 0, y, o, s;
-        int64_t acc;
-        if (live) {
-            seed = seed * 1664525u + 1013904223u;
-            if ((seed >> 16) < thr) {
-                lvl += e;
-                x = (int32_t)((int64_t)lvl * cg >> 20);            /* Q24 x Q16 -> Q20 */
+        int32_t x[SK_MAXRES], o, s;
+        for (k = 0; k < nres; k++)
+            x[k] = 0;
+        if (kind == SK_RATCHET) {
+            if (v->count > 0) {
+                v->e -= SK_RDELTA[t] + (int32_t)(((int64_t)v->e * 131) >> 16);   /* - (delta + 0.002 e) */
+                if (v->e < 0) {
+                    v->e = 1 << 24;
+                    v->count--;
+                }
+                v->seed = v->seed * 1664525u + 1013904223u;
+                if ((v->seed >> 16) < thr)
+                    v->lvl += (int32_t)(((int64_t)v->e * v->e) >> 24);
+                {
+                    int32_t a = (int32_t)(((int64_t)v->lvl * v->e) >> 24);          /* level x energy, Q24 */
+                    a = (int32_t)(((int64_t)a * dice_noise(&v->seed) * v->ramp) >> 23);   /* x noise x amplitude */
+                    for (k = 0; k < nres; k++)
+                        x[k] = (int32_t)(((int64_t)a * cgk[k]) >> 20);
+                }
+            }
+        } else if (kind == SK_WATER) {
+            if (v->e >= SK_MIN_ENERGY_Q24) {
+                v->seed = v->seed * 1664525u + 1013904223u;
+                if ((v->seed >> 16) < thr)
+                    water_drop(t, v);
+            }
+            for (k = 0; k < 3u; k++) {           /* the drops: gains decay, frequencies sweep up */
+                if (!v->wg[k])
+                    continue;
+                v->wg[k] = (int32_t)(((int64_t)v->wg[k] * res[k].r) >> 30);
+                if (v->wg[k] > SK_WATER_MIN_Q30) {
+                    v->wf[k] += (uint32_t)(((uint64_t)v->wf[k] * SK_SWEEP_Q26) >> 26);
+                    v->a1[k] = sk_a1(v->wf[k], res[k].r);
+                    x[k] = (int32_t)(((((int64_t)v->lvl * cgk[k]) >> 20) * v->wg[k]) >> 30);
+                } else
+                    v->wg[k] = 0;
+            }
+        } else if (live) {
+            v->seed = v->seed * 1664525u + 1013904223u;
+            if ((v->seed >> 16) < thr) {         /* a collision */
+                int32_t l = v->lvl += v->e;
+                if (kind == SK_TUBES) {
+                    k = (uint32_t)(((v->seed = v->seed * 1664525u + 1013904223u) >> 16) * nres >> 16);
+                    x[k] = (int32_t)(((int64_t)l * cgk[k]) >> 20);
+                } else {
+                    for (k = 0; k < nres; k++)
+                        x[k] = (int32_t)(((int64_t)l * cgk[k]) >> 20);
+                    if (SK_VARY[t])
+                        voice_vary(t, v);
+                }
             }
         }
-        lvl = (int32_t)((int64_t)lvl * snd_d >> 15);
-        acc = (int64_t)a1 * y1 + (int64_t)a2 * y2;
-        y = x - (int32_t)((acc + (acc < 0 ? (1 << 29) - 1 : 0)) >> 29);   /* towards zero: no limit cycle */
-        o = e0 * y + e1 * y1 + e2 * y2;
-        y2 = y1;
-        y1 = y;
-        s = (int32_t)((int64_t)o * outg >> 21);                    /* Q20 x Q16 -> Q15 */
+        v->lvl = (int32_t)(((int64_t)v->lvl * snd_d) >> 15);
+        o = voice_res(v, res, nres, x, e0, e1, e2);
+        s = (int32_t)(((int64_t)o * outg) >> 21);                  /* Q20 x Q16 -> Q15 */
         mix[2u * i] += s * gl >> 15;
         mix[2u * i + 1u] += s * gr >> 15;
     }
-    v->e = e;
-    v->lvl = lvl;
-    v->y1 = y1;
-    v->y2 = y2;
-    v->seed = seed;
-    if (e < SK_MIN_ENERGY_Q24 && lvl < 64 && y1 < 16 && y1 > -16 && y2 < 16 && y2 > -16)
+    if ((kind == SK_RATCHET ? v->count <= 0 : v->e < SK_MIN_ENERGY_Q24) && voice_quiet(v, nres))
         voice_silence(t);                        /* rung out: exact silence from here */
 }
 

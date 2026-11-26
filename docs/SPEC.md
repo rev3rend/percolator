@@ -198,13 +198,28 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
   model (as STK's `noteOn`: 0.1 × amplitude, capped at 1). One deliberate difference: STK stops ticking the
   resonators when the energy falls below 0.001, which cuts a ringing coin; here they ring out, and the voice goes idle
   (its state zeroed: exact silence) only when everything is near zero. The resonators' feedback rounds towards zero
-  (a floor left a DC limit cycle in the low resonances, Crunch and Water Drops, found by the tests). STK's Guiro and
-  Wrench never set a system decay (the ratchet replaces it; STK keeps the previous instrument's): until the ratchet
-  is ported they use 0.999 and decay scale 0.95. A track whose energy and filter state have fallen below a threshold is idle and costs
-  nothing. If the worst case (all 23 ringing, 84 resonators) does not fit the audio ISR, a cap on simultaneously
-  sounding tracks is added (the quietest is released), set from measurements.
+  (a floor left a DC limit cycle in the low resonances, Crunch and Water Drops, found by the tests). A track whose
+  energy and filter state have fallen below a threshold is idle and costs nothing. If the worst case (all 23 ringing,
+  84 resonators) does not fit the audio ISR, a cap on simultaneously sounding tracks is added (the quietest is
+  released), set from measurements.
+- **The full model (milestone 2):** every resonance with its gain; the frequency variation at each collision
+  (Tambourine's jingles, Sleigh Bells, Bamboo Chimes, the Rocks); Tuned Bamboo Chimes excite one of seven tubes per
+  collision; Guiro and Wrench are STK's ratchet; Water Drops are STK's drops (three resonances around the second base
+  frequency, sweeping upwards while their gain decays). Further deliberate differences from STK: FREQ also moves the
+  varied and the sweeping frequencies (STK recomputes them from the base frequencies, so its control is undone at the
+  next collision); every Water hit starts with a drop (STK's drop chance while a hit's energy lasts, ~25 ms, leaves
+  two hits in three silent); Guiro and Wrench: DECAY sets the scrape, 1..8 ratchet sweeps a hit (64: 4; STK adds one
+  sweep per noteOn and spends it at once, as it expects CC 2 scraping), and the hit's amplitude scales the scrape
+  (STK ignores it); they use no system decay (STK sets none for them).
+- **Checked against STK itself:** `tests/stk/` holds STK's Shakers source, unmodified; the suite builds it and compares
+  every instrument at its defaults and with DECAY, OBJECTS and FREQ moved (32 hits each): the spectrum's centroid
+  within 15 %, the decay time within 25 %, the level within 3 dB. Shown but not compared where the port differs on
+  purpose (FREQ on varied frequencies; Water's decay and colour, which STK cuts at 25 ms; the coins at low DECAY,
+  which STK cuts while they still ring).
 - **Parameters per track (0..127, as STK's controls):** ENERGY (shake energy per hit; STK CC 2), DECAY (system
-  decay; CC 4), OBJECTS (number of objects; CC 11), FREQ (resonance frequency ×4^(v/128 − 0.5); CC 1). Defaults are
+  decay; CC 11), OBJECTS (number of objects; CC 4), FREQ (resonance frequency ×4^(v/128 − 0.5); CC 1). STK's code
+  maps CC 11 to the system decay and CC 4 to the number of objects (`__SK_ShakerDamping_`, `__SK_ShakerNumObjects_`);
+  its class comment says the reverse. Found by the reference test; Percolator follows the code. Defaults are
   STK's per-instrument baselines (64 = the instrument's own values; energy default from STK's examples).
 - **Accent:** an accented hit adds the ACCENT amount to the hit's energy (and to locked values that are locked).
 - **Mix:** per track level, pan, delay send, reverb send. Master: chorus (insert), master filter (LP/HP) with
@@ -249,7 +264,7 @@ ignored and replaced by defaults; every value is range-checked on load.
 
 - **In (USB and TRS; TRS MIDI IN on by default; the platform always listens on TRS, the GLOBAL switch makes the app
   ignore what comes from it):** notes on the chosen channel: base note + 0..22 trigger tracks
-  1..23 (default base 53, the FM-1's own keys F3..D#5), velocity → energy; CC 2 / 4 / 11 / 1 set the selected
+  1..23 (default base 53, the FM-1's own keys F3..D#5), velocity → energy; CC 2 / 11 / 4 / 1 set the selected
   track's (or, with a per-track channel mode later, a track's) energy, decay, objects, frequency (STK's numbers);
   MIDI clock, start, stop, continue (and song position pointer) as the clock source says. Note-offs are ignored
   (the models decay on their own), but an all-notes-off / all-sound-off (CC 123 / 120) silences every track.
@@ -310,8 +325,12 @@ Each can be tested on the host and heard in the emulator.
    On the unit (2026-11-26): the sequence plays, levels even, tempo steady, no crackles; the CPU meter (added after
    the first install) reads ~10..15 % both with a sequence running and with a forearm across all the pads while it
    runs. That is the baseline for milestone 2's full model.
-2. **The Shakers port:** all 23 instruments from STK's tables, the four parameters on the knobs, checked against STK
-   built on the host (spectrum, decay, level per instrument); measured CPU cost; the voice cap if needed.
+2. **The Shakers port (built 2026-11-26):** all 23 instruments, every resonance, the variation, the tubes, the ratchet
+   and the drops (Sound, "The full model"); the four parameters on the knobs; checked against STK built on the host
+   (`tests/shakers_test.c`: every instrument and case passes; the comparison found STK's swapped CC 4 / 11 and an
+   overflow in the ratchet). Cost: the audio ISR's static cost 19302 (the skeleton's 2211: a loop over up to seven
+   resonances inside the sample loop); the emulator renders the worst case at 92× real time (the skeleton 319×).
+   To measure on the unit (the CPU meter): the voice cap only if the peak nears 80 %.
 3. **Sound tuning:** levels balanced across the 23, per-track level and pan, energy-from-velocity, accent law; by ear
    in the emulator and on the unit.
 4. **The step sequencer:** 16 steps × 23 tracks, trigs, accent, the clock, PLAY / STOP, track selection, the grid's

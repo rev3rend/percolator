@@ -99,7 +99,7 @@ def generate():
     cmds = [[tools / "gen_aa_font.py", GEN / "ui_fonts.h", "--preset", "inter-tight"],
             [tools / "gen_aa_keycaps.py", GEN / "ui_keycaps.h"],
             [tools / "gen_ui_palettes.py", GEN / "ui_palettes.h"],
-            [tools / "gen_shakers.py", GEN / "shakers.h"]]      # Percolator: STK Shakers tables
+            [tools / "gen_shakers.py", GEN / "shk_tables.h"]]      # Percolator: STK Shakers tables
     procs = [subprocess.Popen([sys.executable, *map(str, c)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True) for c in cmds]
     failed = []
