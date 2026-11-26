@@ -34,6 +34,9 @@
 #define E_MAX_Q24 (1 << 24)
 #define STEP_UNITS ((uint32_t)FS * 30u)          /* phase units per 16th (phase += BPM x 2 per sample) */
 #define NOTE_OFF_BLOCKS 64u      /* notes out: the note-off ~46 ms after the note-on */
+#define LIM_KNEE 16384           /* the master's soft limit: straight up to here (-6 dBFS, where a busy pattern peaks
+                                  * at the defaults), then a quadratic knee y = K + e - e^2 / 2^16 that meets full scale
+                                  * with slope 0 at e = 2^15 (inputs up to +3.5 dB over full scale bend, not clip) */
 
 #define RATCHET_MAX 32           /* sweeps queued at most (hits pile up while a scrape runs) */
 #define FQ_NONE 0xFFu            /* voice_t.fq: the coefficients are not computed yet */
@@ -57,6 +60,8 @@ static struct {
     uint8_t note_off[NT];        /* notes out: blocks until the note-off, 0 = none pending */
     uint8_t out_note[NT];        /* the note sent (base note changes must not leave one hanging) */
     uint8_t out_ch;
+    uint32_t rec_skip;           /* bit t: a trig just recorded ahead of the playhead (it was heard as the pad) */
+    uint8_t rec_skip_pos[NT];    /* its step: skipped once, when the playhead gets there */
     /* the clock */
     uint8_t running;
     uint32_t phase;              /* 0 .. STEP_UNITS */
@@ -237,8 +242,10 @@ static __attribute__((noinline)) void seq_step(void)   /* the 16th gstep: every 
     for (t = 0; t < NT; t++) {
         uint32_t pos = snd.gstep % tp_len(t);
         const step_t *s = &pat.t[t].s[pos];
+        int skip = (snd.rec_skip >> t) & 1u && snd.rec_skip_pos[t] == pos;
         snd.pos_pub[t] = (uint8_t)pos;
-        if ((s->f & ST_TRIG) && audible(t, solo))
+        snd.rec_skip &= ~(1u << t);              /* (once: the next pass plays it) */
+        if ((s->f & ST_TRIG) && audible(t, solo) && !skip)
             snd_hit(t, amp_of(t, (s->f & ST_ACC) != 0));
     }
     snd.gstep++;
@@ -247,8 +254,11 @@ static __attribute__((noinline)) void seq_step(void)   /* the 16th gstep: every 
 static __attribute__((noinline)) void snd_record(uint32_t t, int accent)   /* a pad while REC runs */
 {
     uint32_t len = tp_len(t), g = snd.gstep ? snd.gstep - 1u : 0u, pos;
-    if (snd.phase >= STEP_UNITS / 2u)            /* nearer the next 16th than the one just played */
-        g++;
+    if (snd.phase >= STEP_UNITS / 2u) {          /* nearer the next 16th than the one just played: that one, and */
+        g++;                                     /* not again when the playhead gets there a moment later */
+        snd.rec_skip |= 1u << t;
+        snd.rec_skip_pos[t] = (uint8_t)(g % len);
+    }
     pos = g % len;
     pat.t[t].s[pos].f |= ST_TRIG | (accent ? ST_ACC : 0u);
 }
@@ -463,9 +473,13 @@ static void app_audio(int32_t *out, uint32_t n)
         voice_render(k, mix, n, gl, gr);
     }
     snd.active_pub = snd.active;
-    for (i = 0; i < 2u * n; i++) {               /* the master level, saturated to Q15 */
-        int32_t s = mix[i] * master >> 8;
-        out[i] = s > 32767 ? 32767 : s < -32767 ? -32767 : s;
+    for (i = 0; i < 2u * n; i++) {               /* the master level, then the soft limit to Q15 */
+        int32_t s = mix[i] * master >> 8, a = s < 0 ? -s : s, e = a - LIM_KNEE;
+        if (e > 0) {
+            a = e >= 32768 ? 32767 : LIM_KNEE + e - (e * e >> 16);
+            a = a > 32767 ? 32767 : a;           /* (the knee's top is 32768: one over) */
+        }
+        out[i] = s < 0 ? -a : a;
     }
 }
 

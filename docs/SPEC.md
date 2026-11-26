@@ -223,7 +223,11 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
   STK's per-instrument baselines (64 = the instrument's own values; energy default from STK's examples).
 - **Accent:** an accented hit adds the ACCENT amount to the hit's energy (and to locked values that are locked).
 - **Mix:** per track level, pan, delay send, reverb send. Master: chorus (insert), master filter (LP/HP) with
-  resonance, drive, level.
+  resonance, drive, level. Pan is a balance law (centre: both channels at the track's level; towards a side the other
+  channel falls to zero). After the MASTER level (FX 3) and the MASTER pot, a soft limit: straight up to -6 dBFS
+  (where a busy pattern peaks at the defaults), then a quadratic knee into full scale (slope 0 at +3.5 dB over), so
+  overload bends instead of clipping: everything at maximum (every level 100, MASTER 100, the pot full, accents on
+  every 16th of all 23 tracks) reaches full scale in 0.07 % of samples (a hard clip: 1.2 %).
 - **Effects:** a tempo-synced stereo delay (up to ~1 s; the RAM pool decides), a reverb (Freeverb-like or lighter,
   sized to the budget), a stereo chorus, the master filter and drive. The effects come after the sound is right
   (milestones), and the reverb is the first to be lightened if the ISR budget is tight.
@@ -235,7 +239,9 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
 - **Pattern:** 23 tracks × 16 steps. Per track: length 1..16, clock divide, mute, solo (mute / solo are performance
   state, also saved with the pattern). Per step: trig, accent, probability, ratchet (1..4 with a ramp), condition,
   nudge (−5..+5 twelfths of a step), four locks (or none).
-- **Live record** (REC while running): pad hits go to the nearest step of the pressed track; accent from F#5.
+- **Live record** (REC while running): pad hits go to the nearest step of the pressed track; accent from F#5. A hit
+  recorded ahead of the playhead (nearer the next 16th) is heard as the pad and skipped once when the playhead gets
+  there (no double hit); the next pass plays it.
 - **Pattern change** queued to the end of the pattern (the longest track's 16 steps) while running.
 - **Fill:** ARP held makes FILL conditions true.
 - **Songs:** 4 songs of up to 64 entries (pattern 1..16, repeats 1..16); song playback follows the chain and stops or
@@ -333,10 +339,14 @@ Each can be tested on the host and heard in the emulator.
    On the unit (2026-11-26): CPU PEAK 41 % at most (a busy sequence with the coins and the chimes, and a forearm
    across all the pads while it runs), no late half, everything sounds right. No voice cap needed; ~40 % of the
    audio ISR is left for the effects (milestone 9).
-3. **Sound tuning:** levels balanced across the 23, per-track level and pan, energy-from-velocity, accent law; by ear
+3. **Sound tuning (done 2026-11-26):** levels balanced across the 23 (by simulation in gen_shakers.py; "levels feel
+   good" on the unit), per-track level and pan, energy from MIDI velocity, the accent law (ACCENT adds up to a full
+   hit's energy); added the master's soft limit (dense patterns at full volume clipped). By ear
    in the emulator and on the unit.
-4. **The step sequencer:** 16 steps × 23 tracks, trigs, accent, the clock, PLAY / STOP, track selection, the grid's
-   playhead, patterns saved and loaded (16 slots), queued pattern change, live record.
+4. **The step sequencer (done 2026-11-26):** 16 steps × 23 tracks, trigs, accent, the clock, PLAY / STOP (a double
+   tap restarts), track selection, the grid's playhead, mute / solo, per-track length, patterns saved and loaded (16
+   slots, all kept in RAM), queued pattern change at the bar line, live record (no double hit when recorded ahead of
+   the playhead). Built mostly in the skeleton; checked on the unit (steady tempo).
 5. **Per-step features:** parameter locks, probability, ratchets with ramps.
 6. **Conditions and time:** conditional trigs, FILL, nudge, per-track length and clock divide, swing, note repeat.
 7. **MIDI sync:** clock in (EXT / AUTO), clock out, notes out, start / stop / continue.

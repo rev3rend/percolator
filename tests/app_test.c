@@ -735,6 +735,24 @@ static void sound(void)
             n += (pat.t[8].s[s].f & ST_TRIG) != 0;
         check("REC while running: the pad hit recorded as one trig", n == 1u);
     }
+    {   /* recorded ahead of the playhead (nearer the next 16th): heard once now, not again a moment later */
+        uint8_t h;
+        memset(pat.t[8].s, 0, sizeof pat.t[8].s);
+        snd.run_req = 3;                         /* restart: step 1 at once */
+        host_render(buf, 64);
+        host_render(buf, 4096);                  /* ~93 ms of the 125 ms step: nearer step 2 */
+        h = snd.hits[8];
+        fm1_in.notes = 1u << 8;
+        host_render(buf, 32);
+        fm1_in.notes = 0;
+        host_render(buf, 4096);                  /* past step 2 */
+        check("REC ahead of the playhead: one hit, not two", (uint8_t)(snd.hits[8] - h) == 1u &&
+                                                             (pat.t[8].s[1].f & ST_TRIG));
+        h = snd.hits[8];
+        host_render(buf, 44096);                 /* the next pass: step 2 plays */
+        host_render(buf, 44096);
+        check("REC ahead of the playhead: the next pass plays it", (uint8_t)(snd.hits[8] - h) == 1u);
+    }
     snd.rec = 0;
     while (host_midi_out(&pkt))
         ;
@@ -758,6 +776,33 @@ static void sound(void)
     fm1_in.notes = 0;
     host_render(buf, 8192);
     check("23 at once: the mix saturates within Q15", peak(buf, 8192) <= 32767);
+    {   /* the master's soft limit: everything loud (every level 100, MASTER 100, the pot full, accents on every 16th)
+         * reaches full scale only rarely (a hard clip measured 1.2 % of samples), quiet passes untouched */
+        uint32_t t2, s2, i, full = 0;
+        kit_t keep = kit;
+        int32_t keep_pot = snd.master_q8;
+        for (t2 = 0; t2 < NT; t2++) {
+            kit.t[t2].level = 100;
+            for (s2 = 0; s2 < NSTEP; s2++)
+                pat.t[t2].s[s2].f = ST_TRIG | ST_ACC;
+        }
+        kit.fx[FX_MASTER] = 100;
+        snd.master_q8 = 256;
+        snd.run_req = 3;
+        host_render(buf, 44096 * 2u);
+        for (i = 0; i < 2u * 44096u * 2u; i++)
+            full += buf[i] >= 32767 || buf[i] <= -32767;
+        check("soft limit: full scale in under 0.2 % of samples (hard clip: 1.2 %)", full * 500u < 2u * 44096u * 2u);
+        check("soft limit: never beyond +-32767", peak(buf, 44096u * 2u) <= 32767);
+        snd.run_req = 2;
+        host_render(buf, 64);
+        for (t2 = 0; t2 < NT; t2++) {
+            voice_silence(t2);
+            memset(pat.t[t2].s, 0, sizeof pat.t[t2].s);
+        }
+        kit = keep;
+        snd.master_q8 = keep_pot;
+    }
     app_audio_stop();
     host_render(buf, 64);
     host_render(buf, 64);
