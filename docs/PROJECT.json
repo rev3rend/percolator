@@ -1,0 +1,16 @@
+{
+  "name": "PERCOLATOR",
+  "title": "Percolator",
+  "description": "A 23-track percussion sequencer built on the PhISEM Shakers models of the Synthesis ToolKit (STK), with per-step accents, locks, probability, ratchets, songs, MIDI sync, effects and screen-reader support.",
+  "kind": "drums",
+  "version": "0.1",
+  "authors": "R. Luke DuBois",
+  "year": 2026,
+  "app_id": "0xEE398C08",
+  "features": {
+    "trs_midi": true,
+    "ci": true,
+    "graphify": true
+  },
+  "made": "2026-11-26"
+}
