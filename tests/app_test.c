@@ -187,6 +187,54 @@ static void screens(void)
     check("MUTE (E5) + G3: Sekere muted", (pat.t[2].flags & TP_MUTE) != 0);
     check("SOLO (F5) + D4: Crunch soloed", (pat.t[9].flags & TP_SOLO) != 0);
     check("MUTE / SOLO held: the pad pressed did not change the selection", sel() == 7u);
+    {   /* a chord with E5 / F5 in it (a forearm across the keys, found on the unit): no mute or solo toggled */
+        uint32_t t2, flags = 0;
+        for (t2 = 0; t2 < NT; t2++)
+            pat.t[t2].flags = 0;
+        fm1_in.notes = (1u << 26) - 1u;          /* (G5 left out: it would open SONG, harmless but not tested here) */
+        host_frame();
+        fm1_in.notes = 0;
+        host_frame();
+        for (t2 = 0; t2 < NT; t2++)
+            flags |= pat.t[t2].flags;
+        check("a chord including E5 and F5: no track muted or soloed", flags == 0u);
+        pat.t[2].flags = TP_MUTE;
+        pat.t[9].flags = TP_SOLO;
+        host_frame();
+        check("a solo elsewhere: the selected track's footer says it is silent", track_state(sel()) == 3u &&
+                                                                                  ink_rows(G_FOOT, 240) > 8u);
+        shot("home_grid_solo");
+        {   /* the most crowded header: a queued pattern, STEP, SOLO, FILL, REC, RUN, 125.5 BPM */
+            ui.queued = 12;
+            ui.mode = 1;
+            ui.rec = 1;
+            snd.running_pub = 1;
+            pat.tempo2 = 251;
+            host_press(B_ARP, 1);
+            frames(2);
+            shot("home_head_crowded");
+            lint("the most crowded header");
+            host_press(B_ARP, 0);
+            ui.queued = 0;
+            ui.mode = 0;
+            ui.rec = 0;
+            snd.running_pub = 0;
+            pat.tempo2 = 240;
+            frames(2);
+        }
+        fm1_in.notes = 1u << KEY_MUTE;           /* E5 held, then F5: all off */
+        host_frame();
+        fm1_in.notes |= 1u << KEY_SOLO;
+        host_frame();
+        fm1_in.notes = 0;
+        host_frame();
+        flags = 0;
+        for (t2 = 0; t2 < NT; t2++)
+            flags |= pat.t[t2].flags;
+        check("E5 held, then F5: every mute and solo off", flags == 0u);
+        pat.t[2].flags = TP_MUTE;
+        pat.t[9].flags = TP_SOLO;
+    }
     key_tap(10);
     check("a pad in PAD mode selects its track", sel() == 10u);
 

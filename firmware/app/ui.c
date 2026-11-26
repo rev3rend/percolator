@@ -210,22 +210,23 @@ static void draw_bar_h(int32_t x, int32_t y, int32_t w, int32_t h, int32_t num, 
     }
 }
 
+static uint32_t solo_any(void);
+static uint32_t any_mute(void);
+
 static void draw_head(void)                      /* HOME's top line: pattern, queue, tempo, state */
 {
     char b[40], t[12];
-    int32_t x;
+    int32_t x, left, gap;
     cv_begin(240, G_TOP, T_BG);
     label2(b, sizeof b, 'P', pat_index() + 1u);
-    x = cv_text(6, 2, &AF_M, b, T_THEME);
+    left = x = cv_text(6, 2, &AF_M, b, T_THEME);
     if (ui.queued) {
         label2(t, sizeof t, 'P', ui.queued);
         str_cpy(b, ">", sizeof b);
         cat(b, t, sizeof b);
-        cv_text(x + 6, 4, &AF_S, b, (fm1_ms / 250u) & 1u ? T_ACCENT : T_MID);
+        left = cv_text(x + 6, 4, &AF_S, b, (fm1_ms / 250u) & 1u ? T_ACCENT : T_MID);
     }
-    pv_text(b, sizeof b, &PP[PG_TIME][0], (int32_t)pat_bpm2());
-    cv_text_in(70, 4, 90, &AF_S, b, T_TEXT, T_BG);
-    x = 234;
+    x = 234;                                     /* the state from the right, then the tempo in what is left */
     if (snd.running_pub)
         x = cv_text_r(x, 4, &AF_S, "RUN", T_ACCENT, T_BG) - 6;
     else
@@ -234,7 +235,21 @@ static void draw_head(void)                      /* HOME's top line: pattern, qu
         x = cv_text_r(x, 4, &AF_S, "REC", T_REC, T_BG) - 6;
     if (panel_held(B_ARP))
         x = cv_text_r(x, 4, &AF_S, "FILL", T_THEME, T_BG) - 6;
-    cv_text_r(x, 4, &AF_S, ui.mode ? "STEP" : "PADS", T_MID, T_BG);
+    if (solo_any())
+        x = cv_text_r(x, 4, &AF_S, "SOLO", T_THEME, T_BG) - 6;
+    else if (any_mute())
+        x = cv_text_r(x, 4, &AF_S, "MUTE", T_MID, T_BG) - 6;
+    if (ui.mode)
+        x = cv_text_r(x, 4, &AF_S, "STEP", T_MID, T_BG) - 6;
+    pv_text(b, sizeof b, &PP[PG_TIME][0], (int32_t)pat_bpm2());   /* "120 BPM", or "120" when crowded */
+    gap = x - left - 8;
+    if (text_w(&AF_S, b) > gap) {
+        fmt_int(b, (int32_t)pat_bpm2() / 2);
+        if (text_w(&AF_S, b) > gap)
+            b[0] = 0;
+    }
+    if (b[0])
+        cv_text_in(left + 4, 4, x - left - 4, &AF_S, b, T_TEXT, T_BG);
     cv_rect(0, G_TOP - 1, 240, 1, T_LINE);
     cv_blit(0, 0);
 }
@@ -244,6 +259,14 @@ static uint32_t solo_any(void)
     uint32_t t, a = 0;
     for (t = 0; t < NT; t++)
         a |= pat.t[t].flags & TP_SOLO;
+    return a;
+}
+
+static uint32_t any_mute(void)
+{
+    uint32_t t, a = 0;
+    for (t = 0; t < NT; t++)
+        a |= pat.t[t].flags & TP_MUTE;
     return a;
 }
 
@@ -368,6 +391,14 @@ static void params_line(char *b, unsigned max, uint32_t t)   /* "E100 D64 O64 F6
     }
 }
 
+/* a track's mute / solo state: 0 plays, 1 soloed, 2 muted, 3 silent because other tracks are soloed */
+static const char *const STATE_TEXT[4] = {"", "SOLO", "MUTED", "SILENT: SOLO ON"};
+static uint32_t track_state(uint32_t t)
+{
+    uint32_t f = pat.t[t].flags;
+    return (f & TP_MUTE) ? 2u : (f & TP_SOLO) ? 1u : solo_any() ? 3u : 0u;
+}
+
 static void draw_foot_home(void)
 {
     char b[32];
@@ -376,7 +407,10 @@ static void draw_foot_home(void)
     cv_rect(0, 0, 240, 1, T_LINE);
     if (m[0])
         cv_text_fit(6, 7, &AF_S, m, T_TEXT, T_BG, 228);
-    else {
+    else if (track_state(sel())) {               /* silenced or soloed: say so, it is not visible otherwise */
+        cv_text_fit(6, 7, &AF_S, SK_NAME[sel()], T_TEXT, T_BG, 100);
+        cv_text_r(234, 7, &AF_S, STATE_TEXT[track_state(sel())], track_state(sel()) == 1u ? T_THEME : T_ACCENT, T_BG);
+    } else {
         params_line(b, sizeof b, sel());
         cv_text_r(234, 7, &AF_S, b, T_THEME, T_BG);
         cv_text_fit(6, 7, &AF_S, SK_NAME[sel()], T_TEXT, T_BG, 234 - text_w(&AF_S, b) - 14);
@@ -430,26 +464,30 @@ static void step_desc2(char *b, unsigned max, const step_t *st)
 static void draw_track_top(void)                 /* 22 .. 122: the name and the first 8 steps */
 {
     char b[48];
-    uint32_t t = sel(), s;
+    uint32_t t = sel(), s, silent = track_state(t) >= 2u;
     cv_begin(240, 100, T_BG);
     cv_text_fit(8, 4, &AF_M, SK_NAME[t], T_THEME, T_BG, 150);
-    str_cpy(b, "TRACK ", sizeof b);
-    fmt_int(b + 6, (int32_t)t + 1);
-    cv_text_r(232, 7, &AF_S, b, T_MID, T_BG);
+    if (track_state(t))
+        cv_text_r(232, 7, &AF_S, STATE_TEXT[track_state(t)], track_state(t) == 1u ? T_THEME : T_ACCENT, T_BG);
+    else {
+        str_cpy(b, "TRACK ", sizeof b);
+        fmt_int(b + 6, (int32_t)t + 1);
+        cv_text_r(232, 7, &AF_S, b, T_MID, T_BG);
+    }
     for (s = 0; s < 8u; s++) {
         const step_t *st = &pat.t[t].s[s];
         int32_t x = 10 + (int32_t)s * 28, y = 30;
         int on = (st->f & ST_TRIG) != 0, in = s < tp_len(t), head = shown_pos(t) == s;
-        cv_rrect(x, y, 24, 52, 3, !in ? T_BG : on ? ((st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE, T_BG);
+        cv_rrect(x, y, 24, 52, 3, !in ? T_BG : on ? (silent ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE, T_BG);
         if (head)
             cv_frame(x - 2, y - 2, 28, 56, T_ACCENT);
         if (in) {
             fmt_int(b, (int32_t)s + 1);
-            cv_text_in(x, y + 4, 24, &AF_S, b, on ? T_INK : T_MID, on ? ((st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE);
+            cv_text_in(x, y + 4, 24, &AF_S, b, on ? T_INK : T_MID, on ? (silent ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE);
             if (st_ratchet(st) > 1u) {
                 str_cpy(b, "X", sizeof b);
                 fmt_int(b + 1, (int32_t)st_ratchet(st));
-                cv_text_in(x, y + 20, 24, &AF_S, b, on ? T_INK : T_TEXT, on ? ((st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE);
+                cv_text_in(x, y + 20, 24, &AF_S, b, on ? T_INK : T_TEXT, on ? (silent ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE);
             }
             if (st->prob)
                 cv_rect(x + 3, y + 46, 18 * (int32_t)st_prob(st) / 100, 3, T_ACCENT);
@@ -463,13 +501,13 @@ static void draw_track_top(void)                 /* 22 .. 122: the name and the 
 static void draw_track_bottom(void)              /* 122 .. 214: steps 9..16, the held step, the tracks sounding */
 {
     char b[64];
-    uint32_t t = sel(), s, act = snd.active_pub;
+    uint32_t t = sel(), s, act = snd.active_pub, silent = track_state(t) >= 2u;
     cv_begin(240, 92, T_BG);
     for (s = 8; s < NSTEP; s++) {
         const step_t *st = &pat.t[t].s[s];
         int32_t x = 10 + (int32_t)(s - 8u) * 28, y = 2;
         int on = (st->f & ST_TRIG) != 0, in = s < tp_len(t), head = shown_pos(t) == s;
-        uint16_t fill = !in ? T_BG : on ? ((st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE;
+        uint16_t fill = !in ? T_BG : on ? (silent ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE;
         cv_rrect(x, y, 24, 52, 3, fill, T_BG);
         if (head)
             cv_frame(x - 2, y - 2 < 0 ? 0 : y - 2, 28, 55, T_ACCENT);
@@ -723,12 +761,13 @@ static void ui_draw(void)
     }
     h = fnv(fnv(fnv(fnv(fnv(fnv(FNV0, pat_index()), ui.queued ? ui.queued * 2u + ((fm1_ms / 250u) & 1u) : 0u),
                         pat_bpm2()), snd.running_pub), ui.rec), ui.mode);
-    h = fnv(h, (uint32_t)panel_held(B_ARP));
+    h = fnv(fnv(fnv(h, (uint32_t)panel_held(B_ARP)), solo_any()), any_mute());
     if (h != ui.sig[0])
         draw_head();
     ui.sig[0] = h;
     h = fnv_s(fnv(sel(), kit.t[sel()].p[0] | kit.t[sel()].p[1] << 8 | kit.t[sel()].p[2] << 16 |
                              (uint32_t)kit.t[sel()].p[3] << 24), m);
+    h = fnv(h, track_state(sel()));
     if (set.view == 0u) {
         uint32_t pr;
         for (pr = 0; pr < 12u; pr++) {
@@ -743,7 +782,7 @@ static void ui_draw(void)
         ui.sig[13] = h;
     } else {
         uint32_t t = sel(), s, a = fnv(fnv(FNV0, t), shown_pos(t)), b;
-        a = fnv(a, tp_len(t));
+        a = fnv(fnv(a, tp_len(t)), track_state(t));
         for (s = 0; s < NSTEP; s++) {
             const step_t *st = &pat.t[t].s[s];
             a = fnv(fnv(fnv(fnv(a, st->f), st->prob), st->rat), st->lock[0] | st->lock[1] << 8 |
@@ -932,11 +971,21 @@ static void key_press(uint32_t k, uint32_t keys)
         ui.saving = 0;
         return;
     }
+    /* MUTE and SOLO count as held only if they were down before this frame: a chord (a forearm across the keys)
+     * that includes E5 or F5 must not toggle every pad in it. E5 held, then F5 (or the other way): all off. */
+    if (!ui.mode && ((k == KEY_SOLO && ((ui.last_keys & keys) >> KEY_MUTE & 1u)) ||
+                     (k == KEY_MUTE && ((ui.last_keys & keys) >> KEY_SOLO & 1u)))) {
+        uint32_t t;
+        for (t = 0; t < NT; t++)
+            pat.t[t].flags &= (uint8_t)~(TP_MUTE | TP_SOLO);
+        msg("ALL MUTES AND SOLOS OFF");
+        return;
+    }
     if (k < NT && !ui.mode) {
-        if ((keys >> KEY_MUTE) & 1u) {
+        if ((ui.last_keys >> KEY_MUTE) & 1u) {
             pat.t[k].flags ^= TP_MUTE;
             msg2(SK_SHORT[k], (pat.t[k].flags & TP_MUTE) ? " MUTED" : " UNMUTED");
-        } else if ((keys >> KEY_SOLO) & 1u) {
+        } else if ((ui.last_keys >> KEY_SOLO) & 1u) {
             pat.t[k].flags ^= TP_SOLO;
             msg2(SK_SHORT[k], (pat.t[k].flags & TP_SOLO) ? " SOLO" : " SOLO OFF");
         } else {

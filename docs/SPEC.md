@@ -65,7 +65,13 @@ mode (G5) is a third screen on top of either.
 | G5 (SONG) | open / close the SONG screen | G5 is step 16; EDIT + G5 opens the SONG screen |
 
 The 16 white keys F3..G5 include E5, F5 and G5, so in STEP mode those three are steps 14..16 and their performance
-functions move behind EDIT. Mute and solo are also on the TRACK page (ENV).
+functions move behind EDIT. Mute and solo are also on the TRACK 2 page (ENV twice).
+
+MUTE and SOLO count as held only when they went down before the pad (a chord or a forearm across the keys that
+includes E5 / F5 toggles nothing: found on the unit, where a forearm soloed tracks and silenced the sequence).
+PLAY mode: E5 held, then F5 (or F5, then E5) turns every mute and solo off. The state is always visible: the header
+shows SOLO (any track soloed) or MUTE (any muted); the footer and the TRACK view say MUTED, SOLO or
+"SILENT: SOLO ON" for the selected track, and its trigs are drawn dim in both views.
 
 ### Holding a step (STEP mode)
 
