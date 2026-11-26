@@ -1,6 +1,6 @@
 # Percolator: specification
 
-Status: draft from the setup interview, 2026-11-26.
+Status: from the setup interview, 2026-11-26; milestone 1 (the skeleton) built 2026-11-26.
 
 ## What it is
 
@@ -86,7 +86,7 @@ functions move behind EDIT. Mute and solo are also on the TRACK page (ENV).
 | PLAY | start / stop; held + PLAY again within 0.3 s (double tap) = restart from step 1 |
 | REC | live record on / off (pads into the current pattern while running, quantized; with nudge from the timing once nudge exists) |
 | SEQ | PLAY mode ↔ STEP mode |
-| EDIT | held: the next key selects a track; held + SAVE = clear the selected track (confirm) |
+| EDIT | held: the next key selects a track; held + SAVE twice within 2.5 s = clear the selected track's steps |
 | HOME | the main screen; pressed again on it, toggles GRID (all tracks) ↔ TRACK (selected track zoomed) |
 | SAVE | the SAVE screen: save the pattern / kit / song to a slot (PRESETS picks the slot, SAVE confirms, HOME cancels) |
 | FX | the FX page(s) |
@@ -101,26 +101,30 @@ functions move behind EDIT. Mute and solo are also on the TRACK page (ENV).
 
 | Encoder | On HOME (GRID / TRACK) | On a page |
 | --- | --- | --- |
-| SELECT | scroll the selected track (1..23); press: toggle the selected track's mute | move between the page's sub-pages, if any |
-| ALGORITHM | tempo 40..240 BPM (0.5 BPM fine when pressed and turned, if the platform reports encoder presses; otherwise 1 BPM) | as HOME |
+| SELECT | scroll the selected track (1..23) | move between the pages |
+| ALGORITHM | tempo 40..240 BPM, 1 BPM a detent (the pattern stores half BPM: room for a finer control later) | as HOME |
 | PRESETS | pattern select (1..16), queued while running | as HOME (on SAVE: the slot) |
 | KNOB 1..4 | the selected track's energy, decay, objects, resonance frequency | the page's four parameters |
 
 ## Screens
 
-All 240 × 240, dark warm palette: near-black background (#140E0A), steps in amber (#E0A040) and cream (#F2E6CC),
-accents bright orange (#FF7A1A), the playhead cool cyan (#40D0E0), muted tracks dim brown (#5A4030), text cream.
-High contrast throughout for low vision. Lazy drawing: each screen has a signature of what it shows and redraws only
-what changed.
+All 240 × 240 in the kit's AMBER palette (dark brown-black background, cream text, amber theme, cyan accent; its
+contrast is checked by `tools/gen_ui_palettes.py`): trigs in the selection amber, accented trigs in the brighter
+theme amber, the playhead and the sounding marks cyan, muted tracks dim. Lazy drawing: each screen area has a
+signature of what it shows and redraws only what changed; the GRID's playhead and sounding marks are sent cell by
+cell (a 16th changes ~4 KB of pixels, not the ~90 KB grid). A 1.2 s splash at power-on shows the name, the version and
+the STK / Perry Cook credit.
 
 ### HOME: GRID
 
 - Header (top 20 px): pattern number (P01..P16, the queued one blinking beside it), tempo, play / stop / REC state,
   PLAY or STEP mode, SONG position when a song plays, MIDI clock source (INT / EXT) when external.
-- Grid (23 rows × 16 columns, ~9 px per row): a short name column (MAR, CAB...) and 16 step cells per row. Trigs
-  amber, accented trigs orange, trigs with locks / probability / ratchets marked by a small dot, steps beyond the
-  track's length blanked. A cyan playhead column (per track, since lengths differ). A row's name flashes when the
-  track sounds. The selected track is outlined; muted rows dim; soloed rows marked.
+- Grid (23 rows × 16 columns, 8 px per row): a 12 px name does not fit an 8 px row, so the names go in pairs: the
+  even track's name at the left and the odd track's at the right, both centred on the pair of rows (MAR left / CAB
+  right on rows 1-2, and so on). Trigs amber, accented trigs brighter, steps with locks / probability / ratchets /
+  conditions marked by a small dot, steps beyond the track's length blank. A cyan playhead per track (lengths
+  differ), shown while running. A cyan mark left of a row while the track sounds. The selected track's row tinted and
+  its name cyan; muted (or not soloed) rows dim; soloed names in the theme colour.
 - Footer: the selected track's full name and its four values (E D O F).
 
 ### HOME: TRACK
@@ -162,9 +166,10 @@ HOME cancels. A message confirms "PATTERN 05 SAVED".
 
 ### SONG (G5)
 
-A list of the selected song's chain (up to 64 entries of pattern + repeats 1..16), the playing entry highlighted.
-SELECT moves through the entries, PRESETS sets the pattern, KNOB 1 the repeats, KNOB 2 inserts / deletes, PLAY plays
-the song from the selected entry, PRESETS on the header picks the song (1..4).
+A list of the selected song's chain (up to 64 entries of pattern + repeats 1..16), the selected entry highlighted.
+SELECT moves through the entries (the last position, END, adds an entry with PRESETS), PRESETS sets the entry's
+pattern, KNOB 1 its repeats, KNOB 2 right inserts a copy / left deletes, KNOB 3 LOOP or ONCE, KNOB 4 the song (1..4);
+PLAY plays the song from the selected entry (milestone 8).
 
 ### Messages
 
@@ -179,7 +184,12 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
   (`FM1_FPU`), whichever measures faster with the same sound; the port is checked against STK itself (built on the
   host in the tests) for spectrum and decay of every instrument.
 - **Voices:** 23 tracks, one model each, each always the same instrument. A retrigger adds energy to the running
-  model (as STK's `noteOn`). A track whose energy and filter state have fallen below a threshold is idle and costs
+  model (as STK's `noteOn`: 0.1 × amplitude, capped at 1). One deliberate difference: STK stops ticking the
+  resonators when the energy falls below 0.001, which cuts a ringing coin; here they ring out, and the voice goes idle
+  (its state zeroed: exact silence) only when everything is near zero. The resonators' feedback rounds towards zero
+  (a floor left a DC limit cycle in the low resonances, Crunch and Water Drops, found by the tests). STK's Guiro and
+  Wrench never set a system decay (the ratchet replaces it; STK keeps the previous instrument's): until the ratchet
+  is ported they use 0.999 and decay scale 0.95. A track whose energy and filter state have fallen below a threshold is idle and costs
   nothing. If the worst case (all 23 ringing, 84 resonators) does not fit the audio ISR, a cap on simultaneously
   sounding tracks is added (the quietest is released), set from measurements.
 - **Parameters per track (0..127, as STK's controls):** ENERGY (shake energy per hit; STK CC 2), DECAY (system
@@ -209,7 +219,10 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
 
 ## What is stored
 
-The store has 36 records of 4 KB, `APP_ID` per firmware.
+The store has 36 records of 4 KB, `APP_ID` per firmware. All 16 patterns and the 4 kits are also kept in RAM (the
+pool, ~43 KB of ~380 KB): changing patterns is a pointer swap at the bar line in the audio ISR (no flash read while
+playing), and edits survive changing patterns until power-off; SAVE writes the shown pattern (or kit, or the songs)
+to flash, and "save as" another slot copies it there and plays from that slot.
 
 | Record | Count | Contents |
 | --- | --- | --- |
@@ -223,7 +236,8 @@ ignored and replaced by defaults; every value is range-checked on load.
 
 ## MIDI
 
-- **In (USB and TRS; TRS MIDI IN on by default):** notes on the chosen channel: base note + 0..22 trigger tracks
+- **In (USB and TRS; TRS MIDI IN on by default; the platform always listens on TRS, the GLOBAL switch makes the app
+  ignore what comes from it):** notes on the chosen channel: base note + 0..22 trigger tracks
   1..23 (default base 53, the FM-1's own keys F3..D#5), velocity → energy; CC 2 / 4 / 11 / 1 set the selected
   track's (or, with a per-track channel mode later, a track's) energy, decay, objects, frequency (STK's numbers);
   MIDI clock, start, stop, continue (and song position pointer) as the clock source says. Note-offs are ignored
@@ -256,7 +270,11 @@ ignored and replaced by defaults; every value is range-checked on load.
 - The CPU cost of 23 models plus effects in the audio ISR: measured in milestone 2; a cap on sounding tracks if
   needed.
 - MUTE / SOLO in STEP mode: EDIT + E5 / F5 (above) may feel awkward; revisit once it is played.
-- Whether the encoders report presses (SELECT press = mute, ALGORITHM fine tempo); otherwise those move elsewhere.
+- The encoders have no push switches (settled in the build): mute is on MUTE + pad and the TRACK page; tempo moves
+  in whole BPM.
+- Choosing another kit to play: SAVE KIT to a slot switches to it, but there is no "load kit" control yet. Candidates:
+  a KIT row on GLOBAL 2, or PRESETS on the SAVE screen with a LOAD action. Decide before milestone 8.
+- The GRID's paired names (left / right on two rows) read well in the screenshots; confirm on the unit.
 - Whether tracks should be re-assignable to another STK instrument (two maracas). Not in v1: track n is type n − 1.
 - The exact accent law (energy add vs scale) and the ratchet ramp, by ear.
 - Patterns longer than 16 steps (pages of 16): out of v1, the record has room for a second page later.
@@ -270,10 +288,15 @@ TRS (the FM-1 has TRS in only), patterns longer than 16 steps, re-assignable tra
 
 Each can be tested on the host and heard in the emulator.
 
-1. **Skeleton:** every control from the tables wired to a visible effect (values on screen, "SOON" where not built);
-   HOME GRID / TRACK, every page drawn with its values; one track's sound path complete (a simple placeholder
-   shaker: noise burst into one resonator) from keys and MIDI notes, `app_audio_stop`; settings and one pattern
-   record with defaults, saved and loaded.
+1. **Skeleton (done, 2026-11-26):** every control from the tables wired to a visible effect ("SOON" where not
+   built); HOME GRID / TRACK, all nine pages, SAVE, SONG; all 23 tracks sound through a skeleton PhISEM voice (STK's
+   collision process and energy decays, the first resonance and the equalizer, levels balanced by simulation in
+   `tools/gen_shakers.py`) from the pads and MIDI; a basic step clock already plays trigs, accents, mute, solo and
+   per-track length, records live, changes patterns at the bar line and sends notes out; every per-step setting is
+   edited, shown and stored (played from milestone 5); patterns, kits, songs and settings saved and loaded.
+   Measured: image 129 KB of 582 KB, RAM 7.5 KB of 50 KB, pool 111 KB of 391 KB; the audio ISR's static cost 2211
+   (the start app's 867); the emulator renders the worst case (all 23 pads re-hit every ~23 ms) at ~300× real time.
+   Not yet measured on a unit (`audio_cpu_q8`).
 2. **The Shakers port:** all 23 instruments from STK's tables, the four parameters on the knobs, checked against STK
    built on the host (spectrum, decay, level per instrument); measured CPU cost; the voice cap if needed.
 3. **Sound tuning:** levels balanced across the 23, per-track level and pan, energy-from-velocity, accent law; by ear

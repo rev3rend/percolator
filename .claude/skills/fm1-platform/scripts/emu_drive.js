@@ -10,15 +10,35 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const [url, out = 'build/emu_shots'] = process.argv.slice(2);
-const STEPS = [
-  ['shot', 'boot'],
-  ['knob', 'KNOB 1', 3],
-  ['knob', 'KNOB 4', -2],
-  ['shot', 'knobs'],
-  ['button', 'PLAY', 600],
-  ['key', 'z', 600],
-  ['wait', 300],
-  ['shot', 'after'],
+const STEPS = [                                         // Percolator: splash, pads, a pattern in STEP mode, playing,
+  ['shot', 'splash'],                                    // the TRACK view, the pages, SAVE
+  ['wait', 1500],
+  ['shot', 'home'],
+  ['key', 'z', 200], ['key', 'n', 200], ['key', 'e', 200],   // pads: Maraca, Crunch, Water Drops
+  ['shot', 'pads'],
+  ['button', 'SEQ', 150],                                // STEP mode
+  ['knob', 'SELECT', -30],                               // track 1, Maraca
+  ['key', 'z', 150], ['key', 'c', 150], ['key', 'b', 150], ['key', 'm', 150],
+  ['key', '.', 150], ['key', '2', 150], ['key', 'e', 150], ['key', 't', 150],
+  ['knob', 'SELECT', 3],                                 // track 4, Tambourine: steps 5 and 13
+  ['key', 'b', 150], ['key', 'e', 150],
+  ['knob', 'SELECT', 6],                                 // track 10, Crunch: steps 1 and 9
+  ['key', 'z', 150], ['key', '.', 150],
+  ['shot', 'step-pattern'],
+  ['button', 'PLAY', 150],
+  ['wait', 1500],
+  ['shot', 'playing'],
+  ['wait', 400], ['shot', 'playing-later'],
+  ['button', 'HOME', 150], ['wait', 300], ['shot', 'track-view'],
+  ['button', 'HOME', 150],
+  ['button', 'ENV', 150], ['shot', 'page-track'],
+  ['button', 'SCL', 150], ['shot', 'page-time'],
+  ['button', 'FX', 150], ['shot', 'page-fx1'],
+  ['button', 'GLO', 150], ['shot', 'page-global'],
+  ['button', 'SAVE', 150], ['shot', 'save'],
+  ['button', 'HOME', 150],
+  ['button', 'PLAY', 150],
+  ['shot', 'stopped'],
 ];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
