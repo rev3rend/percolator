@@ -2,8 +2,18 @@
 
 A 23-track percussion sequencer built on the PhISEM Shakers models of the Synthesis ToolKit (STK), with per-step accents, locks, probability, ratchets, songs, MIDI sync, effects and screen-reader support.
 
-Custom firmware for the **M-VAVE FM-1** pocket synthesizer, version 0.1, in development. What it is and how
-it plays: [docs/SPEC.md](docs/SPEC.md).
+Custom firmware for the **M-VAVE FM-1** pocket synthesizer, version 0.1, in development: the skeleton (milestone 1)
+is built and tested on the host and in the browser emulator; every control is wired, all 23 instruments sound
+through a first PhISEM voice, and a basic step sequencer plays. What it is, how it plays and what comes next:
+[docs/SPEC.md](docs/SPEC.md).
+
+**Try it in your browser:** [the Percolator emulator](https://claude.ai/artifact/MTT231c1nvNQsW93vnyYGh): press
+*Switch on*, then play the pads (or your computer keyboard: <kbd>Z</kbd>–<kbd>/</kbd> and <kbd>Q</kbd>–<kbd>P</kbd>);
+SEQ for step mode, PLAY to run.
+
+The sound models are Perry Cook's PhISEM, from the `Shakers` class of the
+[Synthesis ToolKit (STK)](https://github.com/thestk/stk) by Perry R. Cook and Gary P. Scavone (MIT-style licence:
+[LICENSING.md](LICENSING.md)).
 
 Built on the **FM-1 Firmware Kit**: the platform of [Felucca](https://github.com/hugelton/Felucca) (Leo Kuroshita,
 Hügelton Instruments) as [M-Vave-OP1](https://github.com/janschulten/m-vave-op1) runs it.
