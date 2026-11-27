@@ -635,14 +635,17 @@ static void persistence(void)
         check("a fresh unit: P01 is the factory SAMBA (with its kit K1), K1 STUDIO",
               pat_index() == 0u && kit_index() == 0u && !memcmp(&pats[0], &fp, sizeof fp) && pats[0].kitno == 1u &&
               !memcmp(&kits[0], &fk, sizeof fk) && pat.t[0].s[0].f != 0);
-        check("a fresh unit: P16 factory, P17..P32 blank", pats[15].kitno == 8u && pats[16].kitno == 0u &&
-                                                            !pats[16].t[0].s[0].f && !pats[31].t[8].s[0].f);
+        check("a fresh unit: P24 factory, P25..P32 blank", pats[23].kitno == 8u && pats[24].kitno == 0u &&
+                                                            !pats[24].t[0].s[0].f && !pats[31].t[8].s[0].f);
+        check("a fresh unit: the factory names (P01 SAMBA, P24 EUCLID, K3 RAIN ROOM; P25, K9 unnamed)",
+              !strncmp(pats[0].name, "SAMBA", NAME_LEN) && !strncmp(pats[23].name, "EUCLID", NAME_LEN) &&
+              !strncmp(kits[2].name, "RAIN ROOM", NAME_LEN) && !pats[24].name[0] && !kits[8].name[0]);
         kit_default(&fk);
         check("a fresh unit: K8 factory (DRIFT's delay), K9..K12 the defaults", kits[7].fx[FX_DLVL] == 40u &&
                                                                                 !memcmp(&kits[8], &fk, sizeof fk) &&
                                                                                 !memcmp(&kits[11], &fk, sizeof fk));
-        check("a fresh unit: S1..S4 the factory tours, S5..S8 blank", songs.s[0].n == 4u && songs.s[0].e[3][0] == 3u &&
-                                                                       songs.s[3].n == 4u && songs.s[3].loop &&
+        check("a fresh unit: S1..S4 the factory tours, S5..S8 blank", songs.s[0].n == 6u && songs.s[0].e[5][0] == 5u &&
+                                                                       songs.s[3].n == 6u && songs.s[3].loop &&
                                                                        !songs.s[4].n && !songs.s[7].n);
         check("a fresh unit: nothing saved", !pat_stored && !kit_stored && set.kit_follow == 1u);
     }
@@ -674,37 +677,82 @@ static void persistence(void)
         check("every factory pattern sounds with its kit, under 0.1 % at full scale", ok);
         pat_switch(0);
     }
-    {   /* KIT FOLLOWS PATTERN: a pattern starting brings its kit (P05 RAIN: K3); off: the kit stays */
-        queue_pattern(4);
+    {   /* KIT FOLLOWS PATTERN: a pattern starting brings its kit (P07 RAIN: K3); off: the kit stays */
+        queue_pattern(6);
         host_render(buf, 64);
         host_frame();
-        check("KIT FOLLOWS PATTERN: P05 brings K3 (RAIN ROOM)", pat_index() == 4u && kit_index() == 2u);
-        queue_pattern(20);                       /* a blank pattern: no kit, the kit stays */
+        check("KIT FOLLOWS PATTERN: P07 RAIN brings K3 (RAIN ROOM)", pat_index() == 6u && kit_index() == 2u);
+        check("a pattern's name in the message (NEXT / PATTERN P07 RAIN)", strstr(ui.msg, "P07 RAIN") != 0);
+        frames(2);
+        check("its name in the header", ink_rows(0, 18) > 8u);
+        shot("home_named");
+        lint("HOME with a pattern's name");
+        queue_pattern(25);                       /* a blank pattern: no kit, the kit stays */
         host_render(buf, 64);
         host_frame();
-        check("a blank pattern (P21): the kit stays (K3)", pat_index() == 20u && kit_index() == 2u);
+        check("a blank pattern (P26): the kit stays (K3)", pat_index() == 25u && kit_index() == 2u);
         set.kit_follow = 0;
-        queue_pattern(8);                        /* P09 WORKSHOP: K5, but off */
+        queue_pattern(12);                       /* P13 WORKSHOP: K5, but off */
         host_render(buf, 64);
         host_frame();
-        check("KIT FOLLOWS PATTERN off: the kit stays", pat_index() == 8u && kit_index() == 2u);
+        check("KIT FOLLOWS PATTERN off: the kit stays", pat_index() == 12u && kit_index() == 2u);
         set.kit_follow = 1;
-        kit_choose(6);                           /* K7; P21 saved with it: it remembers K7 */
-        queue_pattern(20);
+        kit_choose(6);                           /* K7; P26 saved with it: it remembers K7 */
+        check("a kit's name in the message (KIT K7 CLOCKWORK)", strstr(ui.msg, "K7 CLOCKWORK") != 0);
+        queue_pattern(25);
         host_render(buf, 64);
         host_frame();
-        save_as(SV_PAT, 20);
-        check("SAVE PATTERN: the kit in use saved with it (P21: K7)", pats[20].kitno == 7u && (pat_stored >> 20) & 1u);
+        save_as(SV_PAT, 25);
+        check("SAVE PATTERN: the kit in use saved with it (P26: K7)", pats[25].kitno == 7u && (pat_stored >> 25) & 1u);
+        check("SAVE a blank pattern: the suggested name (PATTERN 26)", !strncmp(pats[25].name, "PATTERN 26", NAME_LEN));
         kit_choose(0);
         queue_pattern(0);
         host_render(buf, 64);
         host_frame();
-        queue_pattern(20);
+        queue_pattern(25);
         host_render(buf, 64);
         host_frame();
-        check("P21 again: K7 with it", kit_index() == 6u);
+        check("P26 again: K7 with it", kit_index() == 6u);
         power_cycle();
-        check("power-on: P21 and its kit link kept", pats[20].kitno == 7u && pat_index() == 20u);
+        check("power-on: P26, its kit link and name kept", pats[25].kitno == 7u && pat_index() == 25u &&
+                                                             !strncmp(pats[25].name, "PATTERN 26", NAME_LEN));
+    }
+    {   /* naming on the SAVE screen: KNOB 1 the cursor, KNOB 2 the letter */
+        uint32_t i;
+        press(B_SAVE);
+        check("SAVE: the name of what is saved (PATTERN 26)", ui.saving && !strcmp(ui.name, "PATTERN 26"));
+        for (i = 0; i < 10u; i++) {              /* clear it: every letter to a space */
+            ui.name_cur = (uint8_t)i;
+            while (ui.name[i] != ' ') {
+                host_turn(EN_K2, 1);
+                host_frame();
+            }
+        }
+        host_turn(EN_K1, -20);                   /* the cursor home, then B, E, A, T */
+        host_frame();
+        {
+            static const char W[] = "BEAT";
+            for (i = 0; W[i]; i++) {
+                while (ui.name[ui.name_cur] != W[i]) {
+                    host_turn(EN_K2, 1);
+                    host_frame();
+                }
+                host_turn(EN_K1, 1);
+                host_frame();
+            }
+        }
+        frames(2);
+        shot("save_naming");
+        lint("SAVE with the name editor");
+        press(B_SAVE);
+        check("a name edited with KNOB 1 / 2 and saved (BEAT, end spaces trimmed)", !strncmp(pats[25].name, "BEAT", NAME_LEN) &&
+                                                                                    pats[25].name[4] == 0);
+        power_cycle();
+        check("power-on: the name kept", !strncmp(pats[25].name, "BEAT", NAME_LEN));
+        memcpy(pats[25].name, "BAD*NAME\x01xx", NAME_LEN);   /* a damaged name: cut at its first wrong character */
+        pat_check(&pats[25]);
+        check("a damaged name: cut at its first wrong character", !strncmp(pats[25].name, "BAD", NAME_LEN) &&
+                                                                  pats[25].name[3] == 0);
     }
     {   /* the old layout (before 2026-11-27): 4 kits in slots 17..20, 4 songs in 21: moved, written once */
         static kit_t ok;
@@ -728,7 +776,8 @@ static void persistence(void)
                                                                               kits[0].t[0].level == 70u);
         check("the old layout: its songs moved (S4), S5..S8 blank", songs.s[3].n == 1u && songs.s[3].e[0][0] == 6u &&
                                                                      !songs.s[4].n);
-        check("the old layout: P17..P21 (its old slots) read as blank patterns", !(pat_stored >> 16) && !pats[17].kitno);
+        check("the old layout: P17..P21 (its old slots) read as not saved (factory)", !(pat_stored >> 16) &&
+                                                                                       pats[17].kitno == 6u);
         {
             static kits_rec_t kr;
             check("the old layout: moved into the new records at once", store_load(SLOT_KITS, APP_ID, &kr, sizeof kr) > 0
@@ -1588,7 +1637,7 @@ static void sound(void)
         host_frame();
         host_press(B_EDIT, 0);
         host_frame();
-        check("EDIT + PRESETS: kit 3", kit_index() == 2u && ui.queued == 0u && strstr(ui.msg, "KIT 3") != 0);
+        check("EDIT + PRESETS: kit 3", kit_index() == 2u && ui.queued == 0u && strstr(ui.msg, "KIT K3") != 0);
         frames(2);
         shot("home_kit3");
         fm1_in.notes = 1u << 5;

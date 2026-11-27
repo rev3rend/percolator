@@ -5,8 +5,9 @@
 
   gen_factory.py OUT.h
 
-16 patterns (P01..P16), 8 kits (K1..K8) and 4 songs (S1..S4) in four styles, two kits and four patterns each:
-hand percussion, ambient, metal and industrial, generative. Written here as readable step strings, expanded by the
+24 patterns (P01..P24), 8 kits (K1..K8) and 4 songs (S1..S4) in four styles, two kits and six patterns each:
+hand percussion, ambient, metal and industrial, generative. Names: at most 12 characters of A-Z 0-9 space - . / #
+(the firmware's name editor's set). Written here as readable step strings, expanded by the
 firmware into its pattern_t / kit_t / song_t (firmware/app/data.c factory_*) when a slot holds no saved record.
 
 Step strings (one character a step; the string's length is the track's LENGTH):
@@ -75,11 +76,15 @@ PATTERNS = [
                            T(CRN, "....X.......X..."), T(GUI, "x.......x......."), T(CAB, "..x...x...x...x.")]),
     ("SON CLAVE", 96, 56, 1, [T(STX, "x..x..x...x.x..."), T(MAR, "x.X.x.X.x.X.x.X."), T(GUI, "X..xX..xX..xX..x"),
                               T(CAB, "....x.......x..x"), T(CRN, "...X..x....X..x."), T(DIM, "x...x...x...x.x.")]),
-    ("WEST AFRICAN BELL", 112, 50, 2, [T(DIM, "X.X.XX.X.X.X"), T(SEK, "XxxXxxXxxXxx"), T(CRN, "X.....x....."),
-                                       T(STX, "..x..x..x..x"), T(MAR, "xoxxoxxoxxox"), T(TAM, ".....X.....X")]),
-    ("TAMBOURINE SOUL", 92, 60, 2, [T(CRN, "X.....x.X......."), T(TAM, "....X.......X..."),
-                                    T(MAR, "xoxoxoxoxoxoxoxo"), T(STX, "..........x...x."), T(GUI, "x..............."),
-                                    T(SLB, "c..............."), T(CAB, "..............f.")]),
+    ("AFRICAN BELL", 112, 50, 2, [T(DIM, "X.X.XX.X.X.X"), T(SEK, "XxxXxxXxxXxx"), T(CRN, "X.....x....."),
+                                  T(STX, "..x..x..x..x"), T(MAR, "xoxxoxxoxxox"), T(TAM, ".....X.....X")]),
+    ("TAMB SOUL", 92, 60, 2, [T(CRN, "X.....x.X......."), T(TAM, "....X.......X..."),
+                              T(MAR, "xoxoxoxoxoxoxoxo"), T(STX, "..........x...x."), T(GUI, "x..............."),
+                              T(SLB, "c..............."), T(CAB, "..............f.")]),
+    ("BOSSA", 132, 50, 1, [T(STX, "x..x..x...x..x.."), T(MAR, "xoxXxoxXxoxXxoxX"), T(CAB, "x.x.x.x.x.x.x.x."),
+                           T(CRN, "X.....x.X.....x."), T(DIM, "........q.......")]),
+    ("SHUFFLE", 100, 66, 2, [T(MAR, "X.xxX.xxX.xxX.xx"), T(TAM, "....X.......X..."), T(GUI, "x.......x...x..."),
+                             T(CRN, "X..x....X.x....."), T(SEK, "..o...o...o...o."), T(SLB, "...............f")]),
     # ambient (K3 RAIN ROOM, K4 GLASS GARDEN)
     ("RAIN", 76, 50, 3, [T(SND, "xoxoxoxo", div=1), T(LRK, "qqqqqqqqqqqqqqqq"), T(WTR, "x...c....o..c..."),
                          T(BRK, "............q..."), T(SEK, "o.o.o.o.o.o.o.o."), T(BMB, "c.......h.......")]),
@@ -87,9 +92,14 @@ PATTERNS = [
                                  T(DIM, "c.....c.....c..."), T(PES, "x..o...")]),
     ("TIDE", 70, 50, 3, [T(WTR, "x.o.."), T(BRK, "x...o.."), T(SND, "x..o..x..o.", div=1),
                          T(LRK, "q.q.q.q.q.q.q"), T(BMB, "c........")]),
-    ("NIGHT INSECTS", 96, 50, 4, [T(MAR, "pqpqpqpqpqpqpqpq", div=4, locks={0: (80, None, None, 110)}),
-                                  T(CAB, "..o...o...o...o."), T(SEK, "o.o.o.o.o.o.o.o."), T(ANG, "...c.......c...."),
-                                  T(SLB, "q...............")]),
+    ("NIGHT BUGS", 96, 50, 4, [T(MAR, "pqpqpqpqpqpqpqpq", div=4, locks={0: (80, None, None, 110)}),
+                               T(CAB, "..o...o...o...o."), T(SEK, "o.o.o.o.o.o.o.o."), T(ANG, "...c.......c...."),
+                               T(SLB, "q...............")]),
+    ("MONSOON", 88, 50, 3, [T(SND, "xxxxxxxxxxxxxxxx", div=4), T(LRK, "pppppppppppppppp"),
+                            T(WTR, "x.o.x.o.x.o.x.o."), T(BRK, "X.....o.....o..."), T(TAM, "........q......."),
+                            T(SEK, "xoxoxoxoxoxoxoxo")]),
+    ("WIND CHIMES", 72, 50, 4, [T(BMB, "x..o..q.", div=2), T(ANG, "o...q...o...q...", div=1),
+                                T(SLB, "q.......", div=1), T(PES, "....q..", div=1), T(DIM, "q..........")]),
     # metal and industrial (K5 WORKSHOP, K6 FOUNDRY)
     ("WORKSHOP", 110, 50, 5, [T(COK, "X.....x...x.X..."), T(WRN, "....x.......x..."), T(NKL, "xxrxxxrxxxrxxxrx"),
                               T(PNY, "..x...x...x...x."), T(CRN, "....X.......X..."), T(MUG, ".......c.......f")]),
@@ -99,31 +109,44 @@ PATTERNS = [
                                                             14: (None, None, None, 56)}),
                            T(DIM, "....x.....x.....", locks={4: (None, None, None, 96), 10: (None, None, None, 84)}),
                            T(PNY, "x.......x......."), T(MUG, "....x.......x..."), T(COK, "X.......X.......")]),
-    ("FACTORY FLOOR", 120, 54, 6, [T(COK, "X..x..X...x.X..."), T(QTR, "..R...R...R...R."), T(WRN, "........x......."),
-                                   T(MUG, "x.x.x.x.x.x.x.x."), T(CRN, "....X.......X..."), T(FRC, "x....o....o.")]),
+    ("SHOP FLOOR", 120, 54, 6, [T(COK, "X..x..X...x.X..."), T(QTR, "..R...R...R...R."), T(WRN, "........x......."),
+                                T(MUG, "x.x.x.x.x.x.x.x."), T(CRN, "....X.......X..."), T(FRC, "x....o....o.")]),
     ("CLANK", 128, 50, 6, [T(NKL, "oooooooooooooooo", div=4), T(WRN, "............ffff"), T(COK, "X...X...X...X..."),
                            T(PES, "..x...x...x...x.", locks={2: (None, None, None, 30), 6: (None, None, None, 50),
                                                          10: (None, None, None, 30), 14: (None, None, None, 70)}),
                            T(QTR, "x.....x.....")]),
+    ("PIPES", 96, 50, 5, [T(MUG, "x..x..x...x.x...", locks={0: (None, 90, None, 24), 3: (None, 90, None, 24),
+                                                           6: (None, 90, None, 36), 10: (None, 90, None, 30),
+                                                           12: (None, 90, None, 20)}),
+                          T(COK, "X.......X..X...."), T(FRC, "....x.......x...", locks={4: (None, None, None, 90)}),
+                          T(NKL, "x.x.x.x.x.x.x.x."), T(WRN, "..............x.")]),
+    ("MACHINE", 116, 50, 6, [T(NKL, "x...x...x...x...", div=5), T(COK, "X..X..X.X..X..X."),
+                             T(QTR, "u.......R......."), T(WRN, "....c.......C..."), T(MUG, "..x...x...x...x."),
+                             T(PES, "1...........n...")]),
     # generative (K7 CLOCKWORK, K8 DRIFT)
     ("POLYMETER", 112, 50, 7, [T(STX, "X.x.."), T(CRN, "X..x..."), T(BRK, "x...x..x..."), T(DIM, "x.....x....x."),
                                T(LRK, "o.o.o.o.o.o.o.o.")]),
-    ("PROBABILITY FIELD", 104, 50, 7, [T(STX, "oooooooooooooooo"), T(CRN, "X...o...X...o..."),
-                                       T(LRK, "qqqqqqqqqqqqqqqq"), T(ANG, "q...q...q...q..."), T(BRK, "..o...o...o...o."),
-                                       T(DIM, "q.q.q.q.q.q.q.q.")]),
+    ("PROB FIELD", 104, 50, 7, [T(STX, "oooooooooooooooo"), T(CRN, "X...o...X...o..."),
+                                T(LRK, "qqqqqqqqqqqqqqqq"), T(ANG, "q...q...q...q..."), T(BRK, "..o...o...o...o."),
+                                T(DIM, "q.q.q.q.q.q.q.q.")]),
     ("CONDITIONS", 90, 50, 8, [T(WTR, "x...c...C...h..."), T(ANG, "c..C..c..C..h..."), T(BMB, "....x.......h..."),
                                T(SLB, "f.......f......."), T(CRN, "X.......X......."), T(SND, "xoxoxoxoxoxoxoxo")]),
-    ("CLOCKWORK DRIFT", 100, 50, 8, [T(STX, "x.e.x.l.x.e.x.l.", div=4), T(CRN, "X..x..x.", div=1),
-                                     T(ANG, "x..o.."), T(DIM, "x...l...e."), T(WTR, "....c.......c...")]),
+    ("TICK DRIFT", 100, 50, 8, [T(STX, "x.e.x.l.x.e.x.l.", div=4), T(CRN, "X..x..x.", div=1),
+                                T(ANG, "x..o.."), T(DIM, "x...l...e."), T(WTR, "....c.......c...")]),
+    ("FIBONACCI", 108, 50, 7, [T(CRN, "X."), T(STX, "x.x"), T(BRK, "x..o."), T(DIM, "x...o.x."),
+                               T(ANG, "x....o...q..."), T(LRK, "q.q.q.q.q.q.q.q.")]),
+    ("EUCLID", 110, 50, 8, [T(CRN, "X..X..X."), T(STX, "x.xx.xx."), T(DIM, "x..x.x..x.x."),
+                            T(WTR, "x.x.x.x..x.x.x.."), T(ANG, "....c.......c...")]),
 ]
-assert len(PATTERNS) == 16
+assert len(PATTERNS) == 24
 
 SONGS = [  # (name, [(pattern 1.., repeats)], loop)
-    ("HAND TOUR", [(1, 2), (2, 2), (3, 2), (4, 2)], 1),
-    ("AMBIENT TOUR", [(5, 2), (6, 2), (7, 2), (8, 2)], 1),
-    ("METAL TOUR", [(9, 2), (10, 2), (11, 2), (12, 2)], 1),
-    ("GENERATIVE TOUR", [(13, 2), (14, 2), (15, 2), (16, 2)], 1),
+    ("HAND TOUR", [(p, 2) for p in range(1, 7)], 1),
+    ("AMBIENT TOUR", [(p, 2) for p in range(7, 13)], 1),
+    ("METAL TOUR", [(p, 2) for p in range(13, 19)], 1),
+    ("GENERATIVE TOUR", [(p, 2) for p in range(19, 25)], 1),
 ]
+NAME_CHARS = set(" ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./#")
 
 COND = {"c": 1, "C": 2, "h": 6, "f": 10, "n": 11, "1": 12}
 
@@ -162,6 +185,9 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit(__doc__)
     hdr, trk, steps, idx = [], [], [], [0]
+    for name in [p[0] for p in PATTERNS] + [k[0] for k in KITS]:
+        if len(name) > 12 or set(name) - NAME_CHARS:
+            raise SystemExit(f"gen_factory: name {name!r}: at most 12 of A-Z 0-9 space - . / #")
     for name, bpm, swing, kit, tracks in PATTERNS:
         if not 40 <= bpm <= 240 or not 50 <= swing <= 75 or not 1 <= kit <= 8:
             raise SystemExit(f"gen_factory: {name}: tempo, swing or kit out of range")
@@ -210,6 +236,7 @@ def main():
               "static const uint8_t FS_LOOP[FS_N] = {%s};" % ", ".join(str(s[2]) for s in SONGS),
               "static const uint8_t FS_ENT[FS_N][8][2] = {%s};  /* pattern 1.. (0: end), repeats */" % ", ".join(
                   "{%s}" % ", ".join("{%d, %d}" % e for e in (s[1] + [(0, 0)] * (8 - len(s[1])))) for s in SONGS)]
+    assert all(len(s[1]) <= 8 for s in SONGS)
     with open(sys.argv[1], "w") as f:
         f.write("\n".join(lines) + "\n")
     print(f"factory: {len(PATTERNS)} patterns ({len(steps)} steps), {len(KITS)} kits, {len(SONGS)} songs")

@@ -80,6 +80,9 @@ static struct {
     uint32_t splash_until;
     uint32_t cpu_next, cpu_win_end, cpu_late0;
     uint8_t restore, restore_slot;   /* FACTORY RESTORE: 1 asked, 2 erasing (restore_slot the next record) */
+    char name[NAME_LEN + 1];     /* SAVE: the name being edited (a C string, spaces at the end trimmed on saving) */
+    uint8_t name_cur;            /* its cursor, 0..NAME_LEN - 1 */
+    uint8_t name_default;        /* it is the suggested name (follows the slot until edited) */
     uint8_t cpu_win, cpu_prev;   /* the worst half (%) of this window and of the one before */
 } ui;
 
@@ -141,6 +144,74 @@ static void label2(char *b, unsigned max, char c, uint32_t n)   /* "P01", "K3" s
     cat(b, t, max);
 }
 
+static void name_str(char *d, const char *n)     /* a name field as a C string */
+{
+    uint32_t i;
+    for (i = 0; i < NAME_LEN && n[i]; i++)
+        d[i] = n[i];
+    d[i] = 0;
+}
+
+static void label_named(char *b, unsigned max, char c, uint32_t n, const char *name)   /* "P05 RAIN" */
+{
+    char t[NAME_LEN + 1];
+    label2(b, max, c, n);
+    name_str(t, name);
+    if (t[0]) {
+        cat(b, " ", max);
+        cat(b, t, max);
+    }
+}
+
+static void name_suggest(void)                   /* SAVE: the suggested name for the slot ("PATTERN 25", "KIT 9") */
+{
+    char t[8];
+    str_cpy(ui.name, ui.save_what == SV_PAT ? "PATTERN " : "KIT ", sizeof ui.name);
+    fmt_int(t, ui.save_slot + 1);
+    cat(ui.name, t, sizeof ui.name);
+    ui.name_default = 1;
+}
+
+static void name_start(void)                     /* SAVE opened or SELECT moved: the name of what is saved */
+{
+    const char *src = ui.save_what == SV_PAT ? pat.name : kit.name;
+    ui.name_cur = 0;
+    if (ui.save_what == SV_SONG)
+        ui.name[0] = 0;
+    else if (src[0]) {
+        name_str(ui.name, src);
+        ui.name_default = 0;
+    } else
+        name_suggest();
+}
+
+static void name_turn(uint32_t role, int32_t s)  /* SAVE: KNOB 1 the cursor, KNOB 2 the letter under it */
+{
+    uint32_t len = str_len(ui.name), k, n = sizeof NAME_CHARS - 1u;
+    if (ui.save_what == SV_SONG)
+        return;
+    if (role == EN_K1) {
+        ui.name_cur = (uint8_t)clampi(ui.name_cur + s, 0, (int32_t)(len < NAME_LEN ? len : NAME_LEN - 1u));
+        return;
+    }
+    while (len <= ui.name_cur && len < NAME_LEN)  /* (a letter past the end: spaces up to it) */
+        ui.name[len++] = ' ';
+    ui.name[len] = 0;
+    for (k = 0; k < n && NAME_CHARS[k] != ui.name[ui.name_cur]; k++)
+        ;
+    k = (uint32_t)(((int32_t)(k % n) + s % (int32_t)n + (int32_t)n) % (int32_t)n);
+    ui.name[ui.name_cur] = NAME_CHARS[k];
+    ui.name_default = 0;
+}
+
+static void name_store(char *field)              /* the edited name into a record's field, end spaces trimmed */
+{
+    uint32_t len = str_len(ui.name);
+    while (len && ui.name[len - 1u] == ' ')
+        ui.name[--len] = 0;
+    name_copy(field, ui.name);
+}
+
 static void track_select(uint32_t t)
 {
     set.sel = (uint8_t)t;
@@ -150,10 +221,10 @@ static void track_select(uint32_t t)
 /* ---------------------------------------------------------- pattern change, saving --- */
 static void queue_pattern(uint32_t i)
 {
-    char b[8];
+    char b[24];
     if (i >= NPAT)
         return;
-    label2(b, sizeof b, 'P', i + 1u);
+    label_named(b, sizeof b, 'P', i + 1u, pats[i].name);
     if (i == pat_index() && !ui.queued) {
         msg2(b, " PLAYING");
         return;
@@ -170,10 +241,10 @@ static void queue_pattern(uint32_t i)
 
 static void kit_choose(uint32_t i)               /* EDIT + PRESETS: another kit, at once (all four kept in RAM) */
 {
-    char b[8];
+    char b[24];
     kit_cur = &kits[i % NKIT];
-    label2(b, sizeof b, 'K', (i % NKIT) + 1u);
-    msg2("KIT ", b + 1);
+    label_named(b, sizeof b, 'K', (i % NKIT) + 1u, kit.name);
+    msg2("KIT ", b);
 }
 
 static void song_play(void)                      /* the SONG screen's PLAY */
@@ -222,12 +293,14 @@ static void save_store(void)
             pats[ui.save_slot] = pat;            /* save as: the slot gets a copy, and is played from now on */
         pat_cur = &pats[ui.save_slot];
         pat.kitno = (uint8_t)(kit_index() + 1u); /* the kit in use is saved with it (KIT FOLLOWS PATTERN) */
+        name_store(pat.name);
         r = data_save_pattern(ui.save_slot);
         label2(b, sizeof b, 'P', ui.save_slot + 1u);
     } else if (ui.save_what == SV_KIT) {
         if (ui.save_slot != kit_index())
             kits[ui.save_slot] = kit;
         kit_cur = &kits[ui.save_slot];
+        name_store(kit.name);
         r = data_save_kit(ui.save_slot);
         label2(b, sizeof b, 'K', ui.save_slot + 1u);
     } else {
@@ -284,6 +357,11 @@ static void draw_head(void)                      /* HOME's top line: pattern, qu
     cv_begin(240, G_TOP - 2, T_BG);
     label2(b, sizeof b, 'P', pat_index() + 1u);
     left = x = cv_text(6, 2, &AF_M, b, T_THEME);
+    if (pat.name[0]) {                           /* its name, at most ~80 px (the tempo gives way first) */
+        char nm[NAME_LEN + 1];
+        name_str(nm, pat.name);
+        left = x = cv_text_fit(x + 5, 4, &AF_S, nm, T_TEXT, T_BG, 80);
+    }
     label2(t, sizeof t, 'K', kit_index() + 1u);   /* the kit */
     left = x = cv_text(x + 5, 4, &AF_S, t, T_MID);
     if (snd.song_on_pub) {                       /* a song: which, its entry of how many */
@@ -761,10 +839,20 @@ static void draw_save(void)
                T_MID, T_BG);
     cv_blit(0, 0);
     cv_begin(240, 116, T_BG);
-    cv_text_in(0, 14, 240, &AF_S, "SELECT: PATTERN / KIT / SONG", T_MID, T_BG);
-    cv_text_in(0, 34, 240, &AF_S, "PRESETS: SLOT", T_MID, T_BG);
-    cv_text_in(0, 54, 240, &AF_S, "SAVE: STORE", T_TEXT, T_BG);
-    cv_text_in(0, 74, 240, &AF_S, "ANY OTHER BUTTON: CANCEL", T_MID, T_BG);
+    if (ui.save_what != SV_SONG) {               /* the name: each letter in a cell, the cursor's lit */
+        uint32_t i, len = str_len(ui.name);
+        for (i = 0; i < NAME_LEN; i++) {
+            int32_t x = 12 + (int32_t)i * 18;
+            char c[2] = {i < len ? ui.name[i] : 0, 0};
+            int cur = i == ui.name_cur;
+            cv_rrect(x, 2, 16, 22, 3, cur ? T_ACCENT : T_RAISE, T_BG);
+            if (c[0] && c[0] != ' ')
+                cv_text_in(x, 4, 16, &AF_M, c, cur ? T_INK : T_TEXT, cur ? T_ACCENT : T_RAISE);
+        }
+        cv_text_in(0, 32, 240, &AF_S, "K1: CURSOR   K2: LETTER", T_MID, T_BG);
+    }
+    cv_text_in(0, 52, 240, &AF_S, "SELECT: WHAT   PRESETS: SLOT", T_MID, T_BG);
+    cv_text_in(0, 72, 240, &AF_S, "SAVE: STORE   OTHER: CANCEL", T_TEXT, T_BG);
     cv_text_fit(10, 96, &AF_S, m, T_TEXT, T_BG, 220);
     cv_blit(0, 124);
 }
@@ -805,7 +893,7 @@ static void draw_song(void)
         if (e == (int32_t)sg->n)
             cv_text(56, y, &AF_S, "END (PRESETS: ADD)", e == (int32_t)ui.song_cur ? T_INK : T_DIM);
         else {
-            label2(b, sizeof b, 'P', sg->e[e][0] + 1u);
+            label_named(b, sizeof b, 'P', sg->e[e][0] + 1u, pats[sg->e[e][0] % NPAT].name);
             cat(b, "  X", sizeof b);
             fmt_int(t, sg->e[e][1]);
             cat(b, t, sizeof b);
@@ -826,8 +914,11 @@ static uint32_t sig_song(void)
     const song_t *sg = &songs.s[song_index];
     uint32_t h = fnv(fnv(fnv(fnv(FNV0, song_index), ui.song_cur), sg->n), sg->loop), i;
     h = fnv(fnv(fnv(h, snd.song_on_pub), snd.song_e_pub + 64u * song_n_shown()), snd.song_arm);
-    for (i = 0; i < sg->n; i++)
-        h = fnv(fnv(h, sg->e[i][0]), sg->e[i][1]);
+    for (i = 0; i < sg->n; i++) {
+        char nm[NAME_LEN + 1];
+        name_str(nm, pats[sg->e[i][0] % NPAT].name);
+        h = fnv_s(fnv(fnv(h, sg->e[i][0]), sg->e[i][1]), nm);
+    }
     return fnv_s(h, msg_now());
 }
 
@@ -937,6 +1028,7 @@ static void ui_draw(void)
     }
     if (ui.saving) {
         h = fnv_s(fnv(fnv(fnv(FNV0, ui.save_what), ui.save_slot), (uint32_t)slot_used(ui.save_what, ui.save_slot)), m);
+        h = fnv(fnv_s(h, ui.name), ui.name_cur);
         if (h != ui.sig[0])
             draw_save();
         ui.sig[0] = h;
@@ -969,6 +1061,11 @@ static void ui_draw(void)
     }
     h = fnv(fnv(fnv(fnv(fnv(fnv(FNV0, pat_index()), ui.queued ? ui.queued * 2u + ((fm1_ms / 250u) & 1u) : 0u),
                         pat_bpm2()), snd.running_pub), ui.rec), ui.mode);
+    {
+        char nm[NAME_LEN + 1];
+        name_str(nm, pat.name);
+        h = fnv_s(h, nm);
+    }
     h = fnv(fnv(h, snd.ext_pub), snd.ext_pub ? snd.ext_bpm2_pub : 0u);
     h = fnv(fnv(fnv(h, kit_index()), snd.song_on_pub), snd.song_on_pub ? snd.song_e_pub + 64u * song_n_shown() : 0u);
     h = fnv(fnv(fnv(h, (uint32_t)panel_held(B_ARP)), solo_any()), any_mute());
@@ -1099,10 +1196,15 @@ static void ui_encoders(void)
                 ui.save_what = (uint8_t)clampi(ui.save_what + s, 0, 2);
                 ui.save_slot = (uint8_t)(ui.save_what == SV_PAT ? pat_index() : ui.save_what == SV_KIT ? kit_index()
                                                                                                     : song_index);
-            } else if (role == EN_PRESET)
+                name_start();
+            } else if (role == EN_PRESET) {
                 ui.save_slot = (uint8_t)clampi(ui.save_slot + s, 0,
                                                ui.save_what == SV_PAT ? NPAT - 1 : ui.save_what == SV_KIT ? NKIT - 1
                                                                                                          : NSONG - 1);
+                if (ui.name_default && ui.save_what != SV_SONG)
+                    name_suggest();              /* (the suggestion follows the slot until edited) */
+            } else if (role == EN_K1 || role == EN_K2)
+                name_turn(role, s);
             continue;
         }
         if (ui.song_open) {
@@ -1350,6 +1452,7 @@ static void button_press(uint32_t b)
         ui.song_open = 0;
         ui.save_what = SV_PAT;
         ui.save_slot = (uint8_t)pat_index();
+        name_start();
         break;
     case B_FX:                                   /* the chain's order: FILTER, CHORUS, DELAY, REVERB */
         page_open(ui.page == PG_FX1 ? PG_FX2 : ui.page == PG_FX2 ? PG_FX3 : ui.page == PG_FX3 ? PG_FX4 : PG_FX1);

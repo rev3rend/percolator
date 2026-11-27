@@ -329,12 +329,18 @@ the factory version, so a fresh unit is full and saving over a factory slot is a
 
 | Style | Kits | Patterns (each with its kit) | Song |
 | --- | --- | --- | --- |
-| Hand percussion | K1 STUDIO, K2 CLUB | P01 SAMBA, P02 SON CLAVE, P03 WEST AFRICAN BELL (12 steps), P04 TAMBOURINE SOUL | S1 HAND TOUR |
-| Ambient | K3 RAIN ROOM, K4 GLASS GARDEN | P05 RAIN, P06 GLASS GARDEN, P07 TIDE (5 / 7 / 11 / 13 / 9 steps), P08 NIGHT INSECTS | S2 AMBIENT TOUR |
-| Metal and industrial | K5 WORKSHOP, K6 FOUNDRY | P09 WORKSHOP, P10 COINS (a melody of FREQ locks), P11 FACTORY FLOOR, P12 CLANK | S3 METAL TOUR |
-| Generative | K7 CLOCKWORK, K8 DRIFT | P13 POLYMETER (5:7:11:13), P14 PROBABILITY FIELD, P15 CONDITIONS, P16 CLOCKWORK DRIFT | S4 GENERATIVE TOUR |
+| Hand percussion | K1 STUDIO, K2 CLUB | P01 SAMBA, P02 SON CLAVE, P03 AFRICAN BELL (12 steps), P04 TAMB SOUL, P05 BOSSA, P06 SHUFFLE | S1 HAND TOUR |
+| Ambient | K3 RAIN ROOM, K4 GLASS GARDEN | P07 RAIN, P08 GLASS GARDEN, P09 TIDE (5 / 7 / 11 / 13 / 9 steps), P10 NIGHT BUGS, P11 MONSOON, P12 WIND CHIMES | S2 AMBIENT TOUR |
+| Metal and industrial | K5 WORKSHOP, K6 FOUNDRY | P13 WORKSHOP, P14 COINS (a melody of FREQ locks), P15 SHOP FLOOR, P16 CLANK, P17 PIPES (a FREQ-lock bass line), P18 MACHINE | S3 METAL TOUR |
+| Generative | K7 CLOCKWORK, K8 DRIFT | P19 POLYMETER (5:7:11:13), P20 PROB FIELD, P21 CONDITIONS, P22 TICK DRIFT, P23 FIBONACCI (2:3:5:8:13), P24 EUCLID (3:8, 5:8, 5:12, 7:16) | S4 GENERATIVE TOUR |
 
-P17..P32 are blank, K9..K12 the default kit, S5..S8 blank. Each pattern rendered for two bars with its kit peaks
+P25..P32 are blank, K9..K12 the default kit, S5..S8 blank. Each tour plays its style's six patterns twice each.
+**Names** (patterns and kits, appended to their records 2026-11-27): at most 12 characters of A-Z 0-9 space - . / #;
+the factory set's are its own, a blank slot has none. Shown in the HOME header after the pattern's number (cut to
+~80 px; the tempo gives way first), in the messages of PRESETS ("NEXT P07 RAIN") and EDIT + PRESETS ("KIT K3 RAIN
+ROOM"), and in the SONG screen's entries. Named on the SAVE screen: the name of what is saved, or a suggestion
+("PATTERN 26", "KIT 9", following the slot until edited), in twelve cells; KNOB 1 the cursor, KNOB 2 the letter;
+end spaces trimmed on saving. A stored name is checked on load (cut at its first character outside the set). Each pattern rendered for two bars with its kit peaks
 between −5 and −15 dBFS and leaves the soft limit almost idle (a test). **Kit link:** saving a pattern stores the kit
 in use; when a pattern starts (chosen, queued, reached in a song) its kit comes with it at the bar line, if it has one
 and KIT FOLLOWS PATTERN (GLOBAL 3) is on. **FACTORY RESTORE** (GLOBAL 3, SAVE, then SAVE to confirm, any other
@@ -455,7 +461,8 @@ Each can be tested on the host and heard in the emulator.
    left at the set time and the second on the right, the room's tail and its exact silence, the chorus's stereo, the
    filter darker / brighter, drive, PRE against POST, app_audio_stop; each proved against a broken version. Pool 324
    KB of 391 KB; no soft float in the chain. CPU with every effect on: to measure on the unit.
-9b. **Factory content (built 2026-11-27):** 32 patterns (P01..P16 factory, the rest blank), 12 kits (K1..K8
+9b. **Factory content (built 2026-11-27):** 32 patterns (P01..P24 factory, named, the rest blank; the names and
+   the 24 patterns on request the same day), 12 kits (K1..K8
    factory), 8 songs (S1..S4 factory tours), the kit link, KIT FOLLOWS PATTERN and FACTORY RESTORE on GLOBAL 3, the
    old layout migrated. Tests: the fresh unit's content, every factory pattern sounding, the kit link on and off and
    saved, the migration written once, the restore through the UI; each proved against a broken version.

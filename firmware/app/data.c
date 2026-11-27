@@ -16,7 +16,8 @@
 
 #define NT 23u                   /* tracks: STK Shakers types 0..22, played by keys 0..22 (F3..D#5) */
 #define NSTEP 16u
-#define NPAT 32u                 /* P01..P16 factory-filled (until saved over), P17..P32 blank */
+#define NPAT 32u                 /* P01..P24 factory-filled (until saved over), P25..P32 blank */
+#define NAME_LEN 12u             /* pattern and kit names: A-Z 0-9 space - . / # (NAME_CHARS), 0 ends a shorter one */
 #define NKIT 12u                 /* K1..K8 factory, K9..K12 the defaults */
 #define NSONG 8u                 /* S1..S4 factory tours, S5..S8 blank */
 #define SONG_LEN 64u
@@ -87,6 +88,7 @@ typedef struct {
     tpat_t t[NT];
     uint8_t kitno;               /* (appended 2026-11-27) the kit saved with it, 1..12 (0: none, the kit stays) */
     uint8_t spare2[3];
+    char name[NAME_LEN];         /* (appended 2026-11-27) its name (all 0: none) */
 } pattern_t;
 #define PAT_VER 1u
 #define PAT_SIZE_V1 (4u + NT * sizeof(tpat_t))   /* a pattern record before the kit link (still read) */
@@ -104,12 +106,35 @@ static uint32_t tp_len(uint32_t t) { uint32_t l = pat.t[t].len; return l && l <=
 static uint32_t pat_bpm2(void) { uint32_t b = pat.tempo2; return b >= 80u && b <= 480u ? b : 240u; }
 static uint32_t pat_swing(void) { uint32_t s = pat.swing; return s >= 50u && s <= 75u ? s : 50u; }
 
+static const char NAME_CHARS[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./#";   /* the name editor's set */
+
+static void name_check(char *n)                  /* a stored name: its set only, ended by 0 (else cut there) */
+{
+    uint32_t i, k, end = 0;
+    for (i = 0; i < NAME_LEN && !end; i++) {
+        for (k = 0; NAME_CHARS[k] && NAME_CHARS[k] != n[i]; k++)
+            ;
+        if (!n[i] || !NAME_CHARS[k])
+            end = 1;
+    }
+    for (i = end ? i - 1u : NAME_LEN; i < NAME_LEN; i++)
+        n[i] = 0;
+}
+
+static void name_copy(char *d, const char *s)    /* a C string into a name field (at most NAME_LEN) */
+{
+    uint32_t i;
+    for (i = 0; i < NAME_LEN; i++)
+        d[i] = s && *s ? *s++ : 0;
+}
+
 static void pat_check(pattern_t *q)   /* after a load: everything in range (an old or damaged record) */
 {
     uint32_t t, s, i;
     q->ver = PAT_VER;
     q->tempo2 = (uint16_t)(q->tempo2 >= 80u && q->tempo2 <= 480u ? q->tempo2 : 240u);
     q->kitno = q->kitno > NKIT ? 0u : q->kitno;
+    name_check(q->name);
     q->swing = (uint8_t)(q->swing >= 50u && q->swing <= 75u ? q->swing : 50u);
     for (t = 0; t < NT; t++) {
         tpat_t *p = &q->t[t];
@@ -155,6 +180,7 @@ typedef struct {
     uint8_t spare[3];
     ktrack_t t[NT];
     uint8_t fx[NFX];
+    char name[NAME_LEN];         /* (appended 2026-11-27) its name (all 0: none) */
 } kit_t;
 #define KIT_VER 1u
 static kit_t kits[NKIT] __attribute__((section(".pool")));
@@ -341,6 +367,7 @@ static void factory_pattern(uint32_t i, pattern_t *q)   /* P(i + 1) as shipped (
     q->tempo2 = FP_HDR[i][0];
     q->swing = (uint8_t)FP_HDR[i][1];
     q->kitno = (uint8_t)FP_HDR[i][2];
+    name_copy(q->name, FP_NAME[i]);
     for (t = 0; t < NT; t++) {
         q->t[t].len = FP_TRK[i][t][0];
         q->t[t].div = FP_TRK[i][t][1];
@@ -375,6 +402,7 @@ static void factory_kit(uint32_t i, kit_t *q)   /* K(i + 1) as shipped; K9..K12:
     }
     for (f = 0; f < NFX; f++)
         q->fx[f] = FK_FX[i][f];
+    name_copy(q->name, FK_NAME[i]);
 }
 
 static void factory_songs(void)                  /* S1..S4 the tours, S5..S8 blank */
@@ -409,6 +437,7 @@ static void kit_check(kit_t *q)
         q->fx[i] = q->fx[i] > 100u ? 50u : q->fx[i];
     q->fx[FX_DTIME] = q->fx[FX_DTIME] > 7u ? 3u : q->fx[FX_DTIME];
     q->fx[FX_FPOS] = q->fx[FX_FPOS] > 1u ? 0u : q->fx[FX_FPOS];
+    name_check(q->name);
 }
 
 static void data_load(void)      /* power-on: settings, the 32 patterns, the 12 kits, the 8 songs */
