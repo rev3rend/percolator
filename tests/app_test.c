@@ -706,6 +706,17 @@ static uint32_t out_count(uint32_t status, uint32_t *first)   /* drain MIDI out:
     return n;
 }
 
+
+static void render_long(uint32_t frames_)       /* longer than buf: in pieces of a second (a multiple of CTL) */
+{
+    while (frames_ >= 44096u) {
+        host_render(buf, 44096);
+        frames_ -= 44096u;
+    }
+    if (frames_ / CTL)
+        host_render(buf, frames_ / CTL * CTL);
+}
+
 static void sound(void)
 {
     uint32_t t, pkt, h0;
@@ -1200,6 +1211,126 @@ static void sound(void)
         check("AUTO without a clock: PLAY runs at the pattern's tempo", n == 8u);
         seq_reset();
         set.clock = CLK_AUTO;
+    }
+    {   /* milestone 8: songs (played from the SONG screen) and kits (EDIT + PRESETS) */
+        uint32_t at[8], k;
+        song_t *sg = &songs.s[1];
+        seq_reset();
+        for (k = 0; k < NPAT; k++)
+            pat_check(&pats[k]);
+        pats[1].t[0].s[0].f = ST_TRIG;           /* P02: track 1; P03: track 2 */
+        pats[2].t[1].s[0].f = ST_TRIG;
+        memset(sg, 0, sizeof *sg);
+        sg->n = 2;
+        sg->e[0][0] = 1; sg->e[0][1] = 2;        /* P02 x2, then P03 x1, ONCE */
+        sg->e[1][0] = 2; sg->e[1][1] = 1;
+        song_index = 1;
+        key_tap(KEY_SONG);
+        check("SONG screen open", ui.song_open == 1u);
+        ui.song_cur = 0;
+        press(B_PLAY);
+        host_render(buf, 64);
+        host_frame();
+        check("SONG PLAY: the song plays its first entry (P02)", snd.song_on_pub && pat_index() == 1u && snd.running_pub);
+        frames(2);
+        shot("song_playing");
+        lint("SONG playing");
+        render_long(88192 * 2u - 1024u);         /* two bars of P02 (2 s each at 120 BPM) */
+        host_render(buf, 2048);
+        host_frame();
+        check("song: after its 2 repeats, the next entry (P03)", pat_index() == 2u && snd.song_e_pub == 1u);
+        key_tap(KEY_SONG);                       /* closed: it plays on, the header shows it */
+        frames(2);
+        shot("home_song");
+        lint("HOME with a song playing");
+        render_long(88192);
+        host_frame();
+        check("song ONCE: stops after its last entry", !snd.running_pub && !snd.song_on_pub);
+        sg->loop = 1;
+        key_tap(KEY_SONG);
+        ui.song_cur = 1;                         /* from entry 2 */
+        press(B_PLAY);
+        host_render(buf, 64);
+        host_frame();
+        check("song: PLAY from the selected entry (P03)", pat_index() == 2u && snd.song_e_pub == 1u);
+        render_long(88192 + 1024u);
+        host_frame();
+        check("song LOOP: after the last entry, the first again", snd.running_pub && pat_index() == 1u &&
+                                                                   snd.song_e_pub == 0u);
+        press(B_PLAY);                           /* (on the SONG screen: stops the song) */
+        host_render(buf, 64);
+        host_frame();
+        check("song: PLAY again stops it", !snd.running_pub && !snd.song_on_pub);
+        press(B_PLAY);
+        host_render(buf, 64);
+        key_tap(KEY_SONG);                       /* closed; a pattern by hand: the song gives way */
+        press(B_OCTUP);
+        host_render(buf, 64);
+        host_frame();
+        check("song: a pattern chosen by hand ends song mode, the pattern plays on",
+              !snd.song_on_pub && snd.running_pub && strstr(ui.msg, "SONG OFF") != 0);
+        snd.run_req = 2;
+        host_render(buf, 64);
+        ui.queued = 0;
+        snd.next_req = 0;
+        song_index = 2;                          /* an empty song */
+        key_tap(KEY_SONG);
+        press(B_PLAY);
+        host_render(buf, 64);
+        check("song empty: PLAY says so, nothing plays", !snd.running_pub && strstr(ui.msg, "EMPTY") != 0);
+        song_index = 1;
+        set.clock = CLK_EXT;                     /* following a clock: armed, the master starts it */
+        clock_run(120, 4096, 0, at, 8);
+        host_frame();
+        ui.song_cur = 1;
+        press(B_PLAY);
+        clock_run(120, 64, 0, at, 8);
+        check("song, EXT: PLAY arms it (nothing plays yet)", !snd.running_pub && snd.song_arm == 2u);
+        host_midi(0xFA, 0, 0);
+        clock_run(120, 64, 0, at, 8);
+        check("song, EXT: the master's start begins it from the entry", snd.running_pub && snd.song_on_pub &&
+                                                                         pat_index() == 2u);
+        host_midi(0xFC, 0, 0);
+        clock_run(120, 64, 0, at, 8);
+        set.clock = CLK_AUTO;
+        clock_run(0, 26496, 0, at, 8);
+        key_tap(KEY_SONG);
+        check("SONG screen closed", !ui.song_open);
+        memset(sg, 0, sizeof *sg);
+        song_index = 0;
+
+        /* kits: EDIT + PRESETS; the sound follows the kit at once */
+        seq_reset();
+        kits[2].t[5].level = 0;                  /* K3: track 6 silent */
+        kits[0].t[5].level = 80;
+        host_press(B_EDIT, 1);
+        host_frame();
+        host_turn(EN_PRESET, 2);
+        host_frame();
+        host_press(B_EDIT, 0);
+        host_frame();
+        check("EDIT + PRESETS: kit 3", kit_index() == 2u && ui.queued == 0u && strstr(ui.msg, "KIT 3") != 0);
+        frames(2);
+        shot("home_kit3");
+        fm1_in.notes = 1u << 5;
+        host_render(buf, 64);
+        fm1_in.notes = 0;
+        host_render(buf, 4096);
+        check("kit 3: its track 6 at level 0 is silent", peak(buf, 4096) == 0);
+        host_press(B_EDIT, 1);
+        host_frame();
+        host_turn(EN_PRESET, -2);
+        host_frame();
+        host_press(B_EDIT, 0);
+        host_frame();
+        ring_out();
+        fm1_in.notes = 1u << 5;
+        host_render(buf, 64);
+        fm1_in.notes = 0;
+        host_render(buf, 4096);
+        check("kit 1 again: track 6 sounds", kit_index() == 0u && peak(buf, 4096) > 400);
+        kits[2].t[5].level = 80;
+        seq_reset();
     }
     while (host_midi_out(&pkt))
         ;

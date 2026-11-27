@@ -98,6 +98,13 @@ static struct {
     volatile uint8_t sel;        /* the selected track: MIDI CCs 2 / 4 / 11 / 1 set its parameters */
     volatile uint8_t next_req;   /* the pattern to change to, + 1 (0: none): at the next bar line, or at once when stopped */
     volatile uint8_t fill;       /* ARP held: FILL conditions true, and held pads repeat */
+    /* a song playing: its entries' patterns, each for its repeats, changed at the bar line */
+    uint8_t song_on, song_n, song_e, song_left;   /* playing, which song, the entry, bars left of it */
+    volatile uint8_t song_req;   /* main loop: play song song_sel from entry song_req - 1 (with the restart) */
+    volatile uint8_t song_sel;
+    volatile uint8_t song_arm;   /* following a clock: the same, at the master's start (FA) */
+    volatile uint8_t song_off_req;   /* main loop: leave the song (the pattern plays on) */
+    volatile uint8_t song_on_pub, song_e_pub, song_left_pub;
     /* MIDI clock: following (EXT, AUTO while it arrives) and sending (INT, CLOCK OUT) */
     uint32_t samples;            /* samples since boot (the clock's intervals) */
     uint32_t clk_last;           /* samples at the last F8 */
@@ -393,9 +400,58 @@ static void step_eval(uint32_t t, uint32_t k, uint32_t ahead, uint32_t solo)
     step_hit(t, s, per);                         /* (no room: now) */
 }
 
+static void song_enter(uint32_t e)               /* the song's entry e: its pattern from its first bar */
+{
+    const song_t *sg = &songs.s[snd.song_n % NSONG];
+    uint32_t t;
+    snd.song_e = (uint8_t)e;
+    snd.song_left = sg->e[e][1] >= 1u && sg->e[e][1] <= 16u ? sg->e[e][1] : 1u;
+    pat_cur = &pats[sg->e[e][0] % NPAT];
+    snd.next_req = 0;
+    snd.swapped = 1;
+    snd.tick = 0;
+    for (t = 0; t < NT; t++)
+        snd.prek[t] = 0;
+}
+
+static void song_start(uint32_t song, uint32_t e) /* (song empty: nothing) */
+{
+    const song_t *sg = &songs.s[song % NSONG];
+    if (!sg->n)
+        return;
+    snd.song_n = (uint8_t)(song % NSONG);
+    snd.song_on = 1;
+    song_enter(e < sg->n ? e : 0u);
+}
+
+static int song_bar(void)                        /* a bar line while a song plays: 0 when the song has ended */
+{
+    const song_t *sg = &songs.s[snd.song_n % NSONG];
+    uint32_t e = snd.song_e;
+    if (snd.song_left > 1u) {
+        snd.song_left--;
+        return 1;
+    }
+    if (++e >= sg->n) {                          /* the end: around again, or stop */
+        if (!sg->loop || !sg->n) {
+            snd.song_on = 0;
+            return 0;
+        }
+        e = 0;
+    }
+    song_enter(e);
+    return 1;
+}
+
 static __attribute__((noinline)) void seq_tick(void)   /* a clock tick: every track whose step is due, or nudged early */
 {
     uint32_t t, solo, tk;
+    if (snd.song_on && snd.tick && (snd.tick % (NSTEP * TICKS)) == 0u && !song_bar()) {   /* a song's bar line */
+        snd.running = 0;                         /* (ONCE: it has ended) */
+        if (!snd.ext && set.clock_out)
+            midi_out(0xFCu, 0, 0);
+        return;
+    }
     if (snd.next_req && snd.tick && (snd.tick % (NSTEP * TICKS)) == 0u) {   /* a queued pattern: at the bar line */
         pat_cur = &pats[(snd.next_req - 1u) % NPAT];
         snd.next_req = 0;
@@ -556,13 +612,20 @@ static __attribute__((noinline)) void clk_msg(uint32_t b, uint32_t spp)
     if (b == 0xFAu) {
         clk_start(0);
         snd.clk_budget = 0;
+        if (snd.song_arm) {                      /* a song armed on the SONG screen */
+            song_start(snd.song_sel, snd.song_arm - 1u);
+            snd.song_arm = 0;
+        } else
+            snd.song_on = 0;
     } else if (b == 0xFBu) {
         clk_start(snd.spp_tick != 0xFFFFFFFFu ? snd.spp_tick         /* the song position, else the next 16th */
                                               : (snd.tick + TICKS - 1u) / TICKS * TICKS);   /* (MIDI counts 16ths) */
         snd.spp_tick = 0xFFFFFFFFu;
         snd.clk_budget = 0;
-    } else if (b == 0xFCu)
+    } else if (b == 0xFCu) {
         snd.running = 0;
+        snd.song_on = 0;
+    }
     else if (b == 0xF2u)                         /* (a 16th each: our ticks, within the pattern) */
         snd.spp_tick = (spp % NSTEP) * TICKS;
 }
@@ -740,13 +803,23 @@ static void app_audio(int32_t *out, uint32_t n)
             if (snd.running && set.clock_out)
                 midi_out(0xFCu, 0, 0);
             snd.running = 0;
+            snd.song_on = 0;
         } else if (r == 3u || !snd.running) {
             clk_start(0);                        /* the first tick at once */
+            snd.song_on = 0;
+            if (snd.song_req) {                  /* the SONG screen's PLAY: the song from an entry */
+                song_start(snd.song_sel, snd.song_req - 1u);
+                snd.song_req = 0;
+            }
             if (set.clock_out) {
                 midi_out(0xFAu, 0, 0);           /* start, and its first clock at once */
                 snd.clk_out_acc = CLK_UNITS;
             }
         }
+    }
+    if (snd.song_off_req) {                      /* a pattern chosen by hand: the song gives way */
+        snd.song_off_req = 0;
+        snd.song_on = 0;
     }
     if (snd.next_req && !snd.running) {          /* stopped: the queued pattern now */
         pat_cur = &pats[(snd.next_req - 1u) % NPAT];
@@ -805,6 +878,9 @@ static void app_audio(int32_t *out, uint32_t n)
     snd.samples += n;
     snd.clk_seen = snd.clk_seen + n > CLK_AUTO_SAMPLES ? CLK_AUTO_SAMPLES : snd.clk_seen + n;
     snd.ext_pub = snd.ext;
+    snd.song_on_pub = snd.song_on;
+    snd.song_e_pub = snd.song_e;
+    snd.song_left_pub = snd.song_left;
     snd.ext_bpm2_pub = (uint16_t)cur_bpm2();
     for (t = 0; t < NT; t++)                     /* notes out: the note-offs due */
         if (snd.note_off[t] && !--snd.note_off[t])

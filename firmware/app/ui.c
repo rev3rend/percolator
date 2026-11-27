@@ -159,7 +159,47 @@ static void queue_pattern(uint32_t i)
     }
     ui.queued = (uint8_t)(i + 1u);
     snd.next_req = ui.queued;
+    if (snd.song_on_pub) {                       /* a pattern by hand: the song gives way */
+        snd.song_off_req = 1;
+        msg2("SONG OFF, NEXT ", b);
+        return;
+    }
     msg2(snd.running_pub ? "NEXT " : "PATTERN ", b);
+}
+
+static void kit_choose(uint32_t i)               /* EDIT + PRESETS: another kit, at once (all four kept in RAM) */
+{
+    char b[8];
+    kit_cur = &kits[i % NKIT];
+    label2(b, sizeof b, 'K', (i % NKIT) + 1u);
+    msg2("KIT ", b + 1);
+}
+
+static void song_play(void)                      /* the SONG screen's PLAY */
+{
+    const song_t *sg = &songs.s[song_index];
+    uint32_t e = ui.song_cur < sg->n ? ui.song_cur : 0u;
+    if (snd.song_on_pub || snd.song_arm) {       /* playing (or armed): stop */
+        snd.song_arm = 0;
+        if (!snd.ext_pub)
+            snd.run_req = 2;
+        msg("SONG STOPPED");
+        return;
+    }
+    if (!sg->n) {
+        msg("SONG EMPTY: PRESETS ADDS");
+        return;
+    }
+    snd.song_sel = song_index;
+    if (snd.ext_pub) {                           /* following a clock: the master's start begins it */
+        snd.song_arm = (uint8_t)(e + 1u);
+        msg("SONG ARMED: THE MASTER STARTS");
+        return;
+    }
+    snd.song_req = (uint8_t)(e + 1u);
+    snd.run_req = 3;
+    ui.queued = 0;
+    msg("SONG PLAYING");
 }
 
 static void settings_keep(void)
@@ -233,6 +273,7 @@ static void draw_bar_h(int32_t x, int32_t y, int32_t w, int32_t h, int32_t num, 
 
 static uint32_t solo_any(void);
 static uint32_t any_mute(void);
+static uint32_t song_n_shown(void) { return snd.song_n % NSONG; }   /* (the song the ISR plays) */
 
 static void draw_head(void)                      /* HOME's top line: pattern, queue, tempo, state */
 {
@@ -241,7 +282,19 @@ static void draw_head(void)                      /* HOME's top line: pattern, qu
     cv_begin(240, G_TOP - 2, T_BG);
     label2(b, sizeof b, 'P', pat_index() + 1u);
     left = x = cv_text(6, 2, &AF_M, b, T_THEME);
-    if (ui.queued) {
+    label2(t, sizeof t, 'K', kit_index() + 1u);   /* the kit */
+    left = x = cv_text(x + 5, 4, &AF_S, t, T_MID);
+    if (snd.song_on_pub) {                       /* a song: which, its entry of how many */
+        char n[6];
+        label2(b, sizeof b, 'S', song_n_shown() + 1u);
+        cat(b, " ", sizeof b);
+        fmt_int(n, snd.song_e_pub + 1);
+        cat(b, n, sizeof b);
+        cat(b, "/", sizeof b);
+        fmt_int(n, songs.s[song_n_shown()].n);
+        cat(b, n, sizeof b);
+        left = cv_text(x + 6, 4, &AF_S, b, T_ACCENT);
+    } else if (ui.queued) {
         label2(t, sizeof t, 'P', ui.queued);
         str_cpy(b, ">", sizeof b);
         cat(b, t, sizeof b);
@@ -717,7 +770,11 @@ static void draw_song(void)
     cat(b, t + 1, sizeof b);
     cv_text(10, 6, &AF_M, b, T_THEME);
     cv_text_r(230, 8, &AF_S, sg->loop ? "LOOP" : "ONCE", T_MID, T_BG);
-    cv_text_r(180, 8, &AF_S, "PLAY: SOON", T_ACCENT, T_BG);
+    {
+        int here = snd.song_on_pub && song_n_shown() == song_index;
+        cv_text_r(184, 8, &AF_S, here ? "PLAYING" : snd.song_arm ? "ARMED" : "PLAY: START", here || snd.song_arm ? T_ACCENT : T_MID,
+                  T_BG);
+    }
     cv_rect(10, 28, 220, 1, T_LINE);
     for (i = 0; i < 4; i++) {                    /* entries first .. first + 3 */
         int32_t e = first + i, y = 34 + i * 21;
@@ -725,6 +782,8 @@ static void draw_song(void)
             break;
         if (e == (int32_t)ui.song_cur)
             cv_rrect(8, y - 2, 224, 20, 4, T_SEL, T_BG);
+        if (snd.song_on_pub && song_n_shown() == song_index && e == (int32_t)snd.song_e_pub)
+            cv_rect(3, y, 3, 14, T_ACCENT);      /* the entry playing */
         fmt_int(t, e + 1);
         str_cpy(b, e + 1 < 10 ? "0" : "", sizeof b);
         cat(b, t, sizeof b);
@@ -743,7 +802,7 @@ static void draw_song(void)
     cv_begin(240, 120, T_BG);
     cv_text_in(0, 20, 240, &AF_S, "SELECT: ENTRY   PRESETS: PATTERN", T_MID, T_BG);
     cv_text_in(0, 40, 240, &AF_S, "K1 REPEATS  K2 ADD/DEL  K3 LOOP", T_MID, T_BG);
-    cv_text_in(0, 60, 240, &AF_S, "K4 SONG 1..4   G5: CLOSE", T_MID, T_BG);
+    cv_text_in(0, 60, 240, &AF_S, "K4 SONG  PLAY: START/STOP  G5: CLOSE", T_MID, T_BG);
     cv_text_fit(10, 94, &AF_S, m, T_TEXT, T_BG, 220);
     cv_blit(0, 120);
 }
@@ -752,6 +811,7 @@ static uint32_t sig_song(void)
 {
     const song_t *sg = &songs.s[song_index];
     uint32_t h = fnv(fnv(fnv(fnv(FNV0, song_index), ui.song_cur), sg->n), sg->loop), i;
+    h = fnv(fnv(fnv(h, snd.song_on_pub), snd.song_e_pub + 64u * song_n_shown()), snd.song_arm);
     for (i = 0; i < sg->n; i++)
         h = fnv(fnv(h, sg->e[i][0]), sg->e[i][1]);
     return fnv_s(h, msg_now());
@@ -846,6 +906,7 @@ static void ui_draw(void)
     h = fnv(fnv(fnv(fnv(fnv(fnv(FNV0, pat_index()), ui.queued ? ui.queued * 2u + ((fm1_ms / 250u) & 1u) : 0u),
                         pat_bpm2()), snd.running_pub), ui.rec), ui.mode);
     h = fnv(fnv(h, snd.ext_pub), snd.ext_pub ? snd.ext_bpm2_pub : 0u);
+    h = fnv(fnv(fnv(h, kit_index()), snd.song_on_pub), snd.song_on_pub ? snd.song_e_pub + 64u * song_n_shown() : 0u);
     h = fnv(fnv(fnv(h, (uint32_t)panel_held(B_ARP)), solo_any()), any_mute());
     if (h != ui.sig[0])
         draw_head();
@@ -986,6 +1047,11 @@ static void ui_encoders(void)
         }
         if (role == EN_ALGO) {                   /* tempo, 1 BPM a detent */
             pat.tempo2 = (uint16_t)clampi((int32_t)pat_bpm2() + 2 * s, 80, 480);
+            continue;
+        }
+        if (role == EN_PRESET && panel_held(B_EDIT)) {   /* EDIT + PRESETS: the kit */
+            kit_choose((uint32_t)clampi((int32_t)kit_index() + s, 0, NKIT - 1));
+            ui.held_fired[B_EDIT] = 1;
             continue;
         }
         if (role == EN_PRESET) {
@@ -1145,6 +1211,10 @@ static void button_press(uint32_t b)
     }
     switch (b) {
     case B_PLAY:
+        if (ui.song_open) {                      /* the SONG screen: the song */
+            song_play();
+            break;
+        }
         if (snd.ext_pub) {                       /* following a MIDI clock: its master starts and stops */
             msg("CLOCK EXT: THE MASTER PLAYS");
             break;

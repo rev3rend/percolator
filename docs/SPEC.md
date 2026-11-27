@@ -110,7 +110,8 @@ shows SOLO (any track soloed) or MUTE (any muted); the footer and the TRACK view
 | --- | --- | --- |
 | SELECT | scroll the selected track (1..23) | move between the pages |
 | ALGORITHM | tempo 40..240 BPM, 1 BPM a detent (the pattern stores half BPM: room for a finer control later) | as HOME |
-| PRESETS | pattern select (1..16), queued while running | as HOME (on SAVE: the slot) |
+| PRESETS | pattern select (1..16), queued while running (a song playing gives way: SONG OFF) | as HOME (on SAVE: the slot) |
+| EDIT held + PRESETS | the kit (K1..K4), at once: all four are kept in RAM, edits survive switching until power-off | as HOME |
 | KNOB 1..4 | the selected track's energy, decay, objects, resonance frequency | the page's four parameters |
 
 ## Screens
@@ -127,8 +128,9 @@ Cook credit.
 
 ### HOME: GRID
 
-- Header (top 20 px): pattern number (P01..P16, the queued one blinking beside it), tempo, play / stop / REC state,
-  PLAY or STEP mode, SONG position when a song plays, MIDI clock source (INT / EXT) when external.
+- Header (top 20 px): pattern number (P01..P16), the kit (K1..K4), then the song playing and its entry of how many
+  ("S2 3/8", cyan) or the queued pattern (blinking); the tempo ("EXT" and the clock's when following); STEP, SOLO /
+  MUTE, FILL, REC, RUN / STOP; the CPU meter in its bottom rule.
 - Grid (23 rows × 16 columns, 8 px per row): a 12 px name does not fit an 8 px row, so the names go in pairs: the
   even track's name at the left and the odd track's at the right, both centred on the pair of rows (MAR left / CAB
   right on rows 1-2, and so on). Trigs amber, accented trigs brighter, steps with locks / probability / ratchets /
@@ -185,7 +187,9 @@ HOME cancels. A message confirms "PATTERN 05 SAVED".
 A list of the selected song's chain (up to 64 entries of pattern + repeats 1..16), the selected entry highlighted.
 SELECT moves through the entries (the last position, END, adds an entry with PRESETS), PRESETS sets the entry's
 pattern, KNOB 1 its repeats, KNOB 2 right inserts a copy / left deletes, KNOB 3 LOOP or ONCE, KNOB 4 the song (1..4);
-PLAY plays the song from the selected entry (milestone 8).
+PLAY plays the song from the selected entry (or from the first when END is selected), and again stops it; the
+header shows PLAYING and a cyan mark on the entry playing. An empty song says so. Following a MIDI clock, PLAY arms
+the song (ARMED) and the master's start begins it.
 
 ### Messages
 
@@ -262,8 +266,11 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
   recorded ahead of the playhead (nearer the next 16th) is heard as the pad and skipped once when the playhead gets
   there (no double hit); the next pass plays it.
 - **Pattern change** queued to the end of the pattern (the longest track's 16 steps) while running.
-- **Songs:** 4 songs of up to 64 entries (pattern 1..16, repeats 1..16); song playback follows the chain and stops or
-  loops at the end (a song setting).
+- **Songs:** 4 songs of up to 64 entries (pattern 1..16, repeats 1..16); song playback follows the chain, each
+  entry's pattern for its repeats (bars of 16 16ths), changing at the bar line like a queued pattern (its tracks from
+  step 1, its loops from FIRST), and stops (sending FC with CLOCK OUT) or loops at the end (LOOP / ONCE, per song).
+  Playback goes on with the SONG screen closed; PLAY anywhere stops it; a pattern chosen by hand ends song mode and
+  plays on; the master's stop ends it too.
 - **MIDI clock** (GLOBAL: CLOCK INT / EXT / AUTO; GLOBAL 2: CLOCK OUT):
   - EXT follows 24 PPQN in (USB or TRS): the tempo is the smoothed interval between clocks (~16 clocks), and the
     sequencer runs smoothly at it but locked: each clock grants one clock's worth of time, so it never runs more than
@@ -336,8 +343,7 @@ ignored and replaced by defaults; every value is range-checked on load.
 - MUTE / SOLO in STEP mode: EDIT + E5 / F5 (above) may feel awkward; revisit once it is played.
 - The encoders have no push switches (settled in the build): mute is on MUTE + pad and the TRACK page; tempo moves
   in whole BPM.
-- Choosing another kit to play: SAVE KIT to a slot switches to it, but there is no "load kit" control yet. Candidates:
-  a KIT row on GLOBAL 2, or PRESETS on the SAVE screen with a LOAD action. Decide before milestone 8.
+- (Settled in milestone 8: EDIT held + PRESETS chooses the kit.)
 - The GRID's paired names (left / right on two rows) read well in the screenshots; confirm on the unit.
 - Whether tracks should be re-assignable to another STK instrument (two maracas). Not in v1: track n is type n − 1.
 - The exact accent law (energy add vs scale) and the ratchet ramp, by ear.
@@ -396,7 +402,11 @@ Each can be tested on the host and heard in the emulator.
    against a broken version. (Found by them: a first clock's interval, measured from boot, overflowed; and continue
    mid-step played nothing until the next step: now it resumes on the next 16th, as MIDI counts.) Confirmed on the
    unit with a DAW (2026-11-26): clock out and in work, once the DAW selected the renamed port with sync enabled.
-8. **Songs and kits:** the SONG screen, chains, 4 songs, 4 kits, the SAVE screen for all three.
+8. **Songs and kits (done 2026-11-26):** song playback from the SONG screen (from an entry, ONCE / LOOP, on with the
+   screen closed, the header's position, giving way to a pattern chosen by hand, armed for an external clock's
+   start); kits chosen with EDIT + PRESETS (all four in RAM) and shown in the header; SAVE for all three. Tests play
+   a two-entry song through the UI end to end, loop it, start it from an entry, arm it for FA, and check that the
+   sound follows the kit chosen.
 9. **Effects:** chorus, master filter and drive, delay, reverb (in that order, each measured).
 10. **Accessibility:** fm1-reader (the `app_sysex` hook from Solinaesque, `sr.c`, `speak.c`), the MIDItoSpeech
     sidecar.
