@@ -670,13 +670,14 @@ static void draw_page_head(void)
         live |= PP[ui.page][r].name && PP[ui.page][r].live;
     cv_begin(240, 30, T_BG);
     str_cpy(b, PAGE_NAME[ui.page], sizeof b);
-    if (ui.page == PG_TRACK || ui.page == PG_TRACK2) {
+    if (ui.page == PG_SOUND || ui.page == PG_TRACK || ui.page == PG_TRACK2) {
         cat(b, "  ", sizeof b);
         cat(b, SK_SHORT[sel()], sizeof b);
     }
     cv_text(10, 6, &AF_M, b, T_THEME);
     fmt_int(b, ui.page + 1);
-    cat(b, "/9", sizeof b);
+    cat(b, "/", sizeof b);
+    fmt_int(b + str_len(b), NPAGES);
     cv_text_r(230, 8, &AF_S, b, T_MID, T_BG);
     if (!live)
         cv_text_r(196, 8, &AF_S, "SOON", T_ACCENT, T_BG);
@@ -1272,7 +1273,7 @@ static void button_press(uint32_t b)
         ui.save_slot = (uint8_t)pat_index();
         break;
     case B_FX: page_open(ui.page == PG_FX1 ? PG_FX2 : ui.page == PG_FX2 ? PG_FX3 : PG_FX1); break;
-    case B_ENV: page_open(ui.page == PG_TRACK ? PG_TRACK2 : PG_TRACK); break;
+    case B_ENV: page_open(ui.page == PG_SOUND ? PG_TRACK : ui.page == PG_TRACK ? PG_TRACK2 : PG_SOUND); break;
     case B_LFO: page_open(PG_RANDOM); break;
     case B_SCL: page_open(PG_TIME); break;
     case B_GLO: page_open(ui.page == PG_GLO ? PG_GLO2 : PG_GLO); break;
@@ -1327,7 +1328,7 @@ static void ui_leds(void)
         case B_SEQ: on |= ui.mode; break;
         case B_HOME: on |= ui.page == PG_HOME && !ui.saving; break;   /* (SONG is a HOME view too) */
         case B_SAVE: on |= ui.saving && blink; break;
-        case B_ENV: on |= ui.page == PG_TRACK || ui.page == PG_TRACK2; break;
+        case B_ENV: on |= ui.page == PG_SOUND || ui.page == PG_TRACK || ui.page == PG_TRACK2; break;
         case B_SCL: on |= ui.page == PG_TIME; break;
         case B_LFO: on |= ui.page == PG_RANDOM; break;
         case B_FX: on |= ui.page == PG_FX1 || ui.page == PG_FX2 || ui.page == PG_FX3; break;

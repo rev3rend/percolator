@@ -104,7 +104,7 @@ shows SOLO (any track soloed) or MUTE (any muted); the footer and the TRACK view
 | HOME | the main screen; pressed again on it, cycles GRID (all tracks) → TRACK (selected track zoomed) → SONG → GRID |
 | SAVE | the SAVE screen: save the pattern / kit / song to a slot (PRESETS picks the slot, SAVE confirms, HOME cancels) |
 | FX | the FX page(s) |
-| ENV | the TRACK page (the selected track's mix and length) |
+| ENV | the selected track's pages, in turn: SOUND (its four parameters), TRACK (mix), TRACK 2 (length, divide, mute, solo) |
 | LFO | the RANDOM page |
 | SCL | the TIME page |
 | GLO | the GLOBAL page |
@@ -152,7 +152,12 @@ The selected track zoomed: its name and STK type, 16 large step cells with all p
 probability as a bar, ratchet count, condition as text, nudge as an offset, lock markers). While a step is held, its
 values are shown in full. A level meter strip of all 23 tracks along the bottom.
 
-### TRACK page (ENV)
+### SOUND page (ENV, first)
+
+The selected track's ENERGY, DECAY, OBJECTS and FREQ (0..127), large, with bars: KNOB 1..4 set them (as on HOME,
+where they are only the footer's small line). Its title names the track ("SOUND PES"). Added on request 2026-11-26.
+
+### TRACK page (ENV, second)
 
 The selected track: LEVEL (0..100), PAN (L50..R50), DELAY send, REVERB send (0..100); sub-page 2: LENGTH (1..16),
 CLOCK DIVIDE (1/1, 1/2, 1/4, 2/1...), MUTE, SOLO.
@@ -301,7 +306,7 @@ to flash, and "save as" another slot copies it there and plays from that slot.
 | --- | --- | --- |
 | Settings | 1 | global page, last pattern / kit / song, screen choices |
 | Patterns | 16 | 23 tracks × 16 steps × ~7 bytes (trig / accent / condition, probability, ratchet + nudge, 4 locks) ≈ 2.6 KB, plus per-track length, divide, mute, solo, the pattern's tempo and swing, a record version |
-| Kits | 4 | per track: the four parameters, level, pan, delay and reverb sends; the FX settings |
+| Kits | 4 | per track: the four parameters, level, pan, delay and reverb sends; the FX settings (every FX page: delay, reverb, chorus, master filter, drive, level). Milestone 9's effects play from these; any setting it adds goes at the end of the record (an older kit loads with it at its default) |
 | Songs | 4 | up to 64 × (pattern, repeats), loop flag (four songs can share one record) |
 
 That is 25 records at most (fewer if songs share one), leaving room for later. Damaged or foreign records are

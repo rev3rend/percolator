@@ -337,7 +337,8 @@ static void screens(void)
     /* every page, its values at the widest */
     {
         static const struct { uint32_t button, presses, page; const char *name; } PG[] = {
-            {B_ENV, 1, PG_TRACK, "page_track"}, {B_ENV, 1, PG_TRACK2, "page_track2"}, {B_SCL, 1, PG_TIME, "page_time"},
+            {B_ENV, 1, PG_SOUND, "page_sound"}, {B_ENV, 1, PG_TRACK, "page_track"},
+            {B_ENV, 1, PG_TRACK2, "page_track2"}, {B_SCL, 1, PG_TIME, "page_time"},
             {B_LFO, 1, PG_RANDOM, "page_random"}, {B_FX, 1, PG_FX1, "page_fx1"}, {B_FX, 1, PG_FX2, "page_fx2"},
             {B_FX, 1, PG_FX3, "page_fx3"}, {B_GLO, 1, PG_GLO, "page_global"}, {B_GLO, 1, PG_GLO2, "page_global2"}};
         uint32_t i, r;
@@ -363,7 +364,21 @@ static void screens(void)
         host_frame();
         check("SELECT on a page: the page before", ui.page == PG_FX3);
     }
-    press(B_ENV);
+    press(B_ENV);                                /* ENV: SOUND first, the selected track's four */
+    check("ENV: the SOUND page first", ui.page == PG_SOUND);
+    kit.t[18].p[SP_EN] = 100;                    /* (the widest-values loop above left them at 0) */
+    kit.t[18].p[SP_DEC] = kit.t[18].p[SP_OBJ] = kit.t[18].p[SP_FRQ] = 64;
+    host_turn(EN_K1, -7);
+    host_turn(EN_K2, 10);
+    host_turn(EN_K3, -4);
+    host_turn(EN_K4, 200);
+    host_frame();
+    check("SOUND page: KNOB 1..4 set the track's ENERGY, DECAY, OBJECTS, FREQ", kit.t[18].p[SP_EN] == 93u &&
+          kit.t[18].p[SP_DEC] == 74u && kit.t[18].p[SP_OBJ] == 60u && kit.t[18].p[SP_FRQ] == 127u);
+    check("SOUND page: the values drawn large (rows of the page)", ink_rows(36, 200) > 60u);
+    kit.t[18].p[SP_EN] = 100;
+    kit.t[18].p[SP_DEC] = kit.t[18].p[SP_OBJ] = kit.t[18].p[SP_FRQ] = 64;
+    press(B_ENV);                                /* SOUND -> TRACK */
     host_turn(EN_K1, -200);
     host_turn(EN_K2, 300);
     host_frame();

@@ -352,13 +352,16 @@ typedef struct {
     const char *const *list;     /* K_LIST: the names */
 } param_t;
 
-enum { PG_TRACK, PG_TRACK2, PG_TIME, PG_RANDOM, PG_FX1, PG_FX2, PG_FX3, PG_GLO, PG_GLO2, NPAGES, PG_HOME = 0xF0 };
-static const char *const PAGE_NAME[NPAGES] = {"TRACK", "TRACK 2", "TIME", "RANDOM", "FX 1 DELAY", "FX 2 REVERB",
+enum { PG_SOUND, PG_TRACK, PG_TRACK2, PG_TIME, PG_RANDOM, PG_FX1, PG_FX2, PG_FX3, PG_GLO, PG_GLO2, NPAGES,
+       PG_HOME = 0xF0 };
+static const char *const PAGE_NAME[NPAGES] = {"SOUND", "TRACK", "TRACK 2", "TIME", "RANDOM", "FX 1 DELAY", "FX 2 REVERB",
                                               "FX 3 MASTER", "GLOBAL", "GLOBAL 2"};
 static const char *const CLOCK_NAME[3] = {"INT", "EXT", "AUTO"};
 static const char *const DLY_NAME[8] = {"1/32", "1/16", "1/16D", "1/8", "1/8D", "1/4", "1/4D", "1/2"};
 
 static const param_t PP[NPAGES][4] = {
+    {{"ENERGY", 0, 127, K_NUM, 1, 0}, {"DECAY", 0, 127, K_NUM, 1, 0},     /* the selected track's four (HOME's knobs) */
+     {"OBJECTS", 0, 127, K_NUM, 1, 0}, {"FREQ", 0, 127, K_NUM, 1, 0}},
     {{"LEVEL", 0, 100, K_NUM, 1, 0}, {"PAN", 0, 100, K_PAN, 1, 0},
      {"DELAY SEND", 0, 100, K_PCT, 0, 0}, {"REVERB SEND", 0, 100, K_PCT, 0, 0}},
     {{"LENGTH", 1, 16, K_STEPS, 1, 0}, {"CLOCK DIVIDE", 0, NDIV - 1, K_LIST, 1, DIV_NAME},
@@ -386,6 +389,7 @@ static void *pv_ptr(uint32_t page, uint32_t row, uint32_t t, int *wide)
 {
     *wide = 0;
     switch (page) {
+    case PG_SOUND: return &kit.t[t].p[row];      /* ENERGY DECAY OBJECTS FREQ = SP_* */
     case PG_TRACK: return row == 0 ? &kit.t[t].level : row == 1 ? &kit.t[t].pan : row == 2 ? &kit.t[t].dsend
                                                                                            : &kit.t[t].rsend;
     case PG_TRACK2:
