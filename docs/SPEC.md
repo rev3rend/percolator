@@ -493,4 +493,8 @@ Each can be tested on the host and heard in the emulator.
     it. Tests: the HELLO answer byte for byte, silence before HELLO and after BYE / 5 s, the update frames left alone,
     what every screen says and each edit, every page's readout and every track's name within the rules, a full
     queue; the CCs, Program Change, no burst and no echo; each proved against a broken version.
-11. **The web:** GitHub Pages with the emulator and the web installer, release builds.
+11. **The web (done 2026-11-27):** release v1.0 (https://github.com/rev3rend/percolator/releases/tag/v1.0: the
+    package, the app, SHA256SUMS; `./build.sh --release 1.0`), installed on the unit and checked there as a screen
+    reader would (the HELLO answer "PERCOLATOR v1.0" and the grid's readout over USB); the web installer on GitHub
+    Pages (https://rev3rend.github.io/percolator/webapp/installer/) serving exactly the released package; the
+    emulator stamped v1.0 (`EMU_VERSION=v1.0 sh web/emu/build.sh`) and published, linked from the README.

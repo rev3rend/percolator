@@ -4,6 +4,8 @@
 # published release (or by hand: Actions > web installer > Run workflow) it takes the latest release's .fwsc, exactly
 # the bytes released, and builds the site with web/make_site.py (the installer, the package, M-VAVE's official V15
 # for the way back, the licences). Nothing is rebuilt here: the package is the one on the release page.
+# The github-pages environment deploys from main only, so the run a release starts on its tag is refused: after
+# publishing a release, run it by hand on main (gh workflow run "web installer" --ref main), as for v1.0.
 name: web installer
 
 on:
