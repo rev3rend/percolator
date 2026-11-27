@@ -51,6 +51,8 @@ typedef struct {
     int16_t count;               /* the ratchet: sweeps left */
     uint16_t ramp;               /* the ratchet: the scrape's amplitude x 256 */
     uint8_t fq;                  /* the FREQ the coefficients were computed for (FQ_NONE: not yet) */
+    uint8_t lmask;               /* bit i: parameter i (SP_*) is locked by the step that hit (until the next hit) */
+    uint8_t lp[4];               /* the locked values (the accent already applied) */
 } voice_t;
 
 static struct {
@@ -62,6 +64,12 @@ static struct {
     uint8_t out_ch;
     uint32_t rec_skip;           /* bit t: a trig just recorded ahead of the playhead (it was heard as the pad) */
     uint8_t rec_skip_pos[NT];    /* its step: skipped once, when the playhead gets there */
+    uint32_t rat_mask;           /* bit t: a ratchet's repeats are still due */
+    int32_t rat_wait[NT];        /* samples until the next repeat */
+    uint32_t rat_gap[NT];        /* samples between repeats (the step / the count) */
+    uint16_t rat_amp[NT];        /* the step's amplitude x 256 */
+    uint8_t rat_k[NT], rat_n[NT], rat_ramp[NT];   /* the next repeat, how many, FLAT / UP / DOWN */
+    uint32_t dice;               /* the steps' probability (an LCG) */
     /* the clock */
     uint8_t running;
     uint32_t phase;              /* 0 .. STEP_UNITS */
@@ -82,7 +90,8 @@ static struct {
     volatile uint8_t swapped;       /* the queued pattern took over (the main loop clears it) */
     volatile uint32_t active_pub;
     volatile uint8_t last_midi;     /* the last MIDI note-on received, 0 = none */
-} snd = {.master_q8 = 256};
+    volatile uint16_t last_amp[NT]; /* each track's last hit's amplitude x 256 (the ratchet ramps, tests) */
+} snd = {.master_q8 = 256, .dice = 0x6A09E667u};
 
 static void voice_silence(uint32_t t)            /* everything back to zero (the dice and the coefficients stay) */
 {
@@ -94,6 +103,7 @@ static void voice_silence(uint32_t t)            /* everything back to zero (the
     for (k = 0; k < 3u; k++)
         v->wg[k] = 0;
     v->count = 0;
+    v->lmask = 0;
     snd.active &= ~(1u << t);
 }
 
@@ -179,14 +189,23 @@ static void notes_out_flush(void)                /* every pending note-off now *
         }
 }
 
-/* a hit on track t: amp_q8 is the amplitude x 256 (STK's 0..1, here up to 2 with an accent) */
-static __attribute__((noinline)) void snd_hit(uint32_t t, uint32_t amp_q8)
+/* parameter i of voice t now: the step's lock while the sound it hit rings, else the kit's (the knob, live) */
+static uint32_t vpar(uint32_t t, const voice_t *v, uint32_t i)
+{
+    return (v->lmask >> i) & 1u ? v->lp[i] : kit.t[t].p[i];
+}
+
+/* a hit on track t with the voice's locks as they are: amp_q8 is the amplitude x 256 (STK's 0..1, up to 2 with an
+ * accent) */
+static __attribute__((noinline)) void voice_hit(uint32_t t, uint32_t amp_q8)
 {
     voice_t *v = &snd.v[t];
-    if (v->fq == FQ_NONE || v->fq != kit.t[t].p[SP_FRQ])
-        voice_coefs(t, v, kit.t[t].p[SP_FRQ]);
+    uint32_t fq = vpar(t, v, SP_FRQ);
+    if (v->fq == FQ_NONE || v->fq != fq)
+        voice_coefs(t, v, fq);
+    snd.last_amp[t] = (uint16_t)amp_q8;
     if (SK_KIND[t] == SK_RATCHET) {              /* a scrape: DECAY sets its sweeps, the amplitude its level */
-        int32_t c = v->count + 1 + kit.t[t].p[SP_DEC] * 7 / 127;
+        int32_t c = v->count + 1 + (int32_t)vpar(t, v, SP_DEC) * 7 / 127;
         v->count = (int16_t)(c > RATCHET_MAX ? RATCHET_MAX : c);
         v->ramp = (uint16_t)amp_q8;
     } else {
@@ -208,12 +227,71 @@ static __attribute__((noinline)) void snd_hit(uint32_t t, uint32_t amp_q8)
     }
 }
 
-static uint32_t amp_of(uint32_t t, int accent)   /* ENERGY 0..127 -> 0..254, plus the accent */
+static void snd_hit(uint32_t t, uint32_t amp_q8)   /* a pad or a MIDI note: the kit's sound, no locks */
 {
-    uint32_t a = kit.t[t].p[SP_EN] * 2u;
+    snd.v[t].lmask = 0;
+    voice_hit(t, amp_q8);
+}
+
+static uint32_t amp_from(uint32_t energy, int accent)   /* ENERGY 0..127 -> 0..254, plus the accent */
+{
+    uint32_t a = energy * 2u;
     if (accent)
         a += set.accent * 655u >> 8;             /* ACCENT 0..100 % -> 0..256 */
     return a;
+}
+
+static uint32_t amp_of(uint32_t t, int accent) { return amp_from(kit.t[t].p[SP_EN], accent); }
+
+/* a ratchet's repeat k of n: FLAT the step's amplitude, UP from 40 % to all of it, DOWN the other way */
+static uint32_t rat_amp(uint32_t a, uint32_t k, uint32_t n, uint32_t ramp)
+{
+    uint32_t pct = 100u;
+    if (n > 1u && ramp == 1u)
+        pct = 40u + 60u * k / (n - 1u);
+    else if (n > 1u && ramp == 2u)
+        pct = 100u - 60u * k / (n - 1u);
+    return a * pct / 100u;
+}
+
+/* a step's trig: the locks (an accent moves each locked value towards 127 by ACCENT %; it adds to the energy as
+ * always), the first hit, and the ratchet's repeats spread over the step */
+static __attribute__((noinline)) void step_hit(uint32_t t, const step_t *s)
+{
+    voice_t *v = &snd.v[t];
+    int acc = (s->f & ST_ACC) != 0;
+    uint32_t i, n = st_ratchet(s), a;
+    v->lmask = 0;
+    for (i = 0; i < 4u; i++)
+        if (s->lock[i]) {
+            uint32_t x = s->lock[i] - 1u;
+            if (acc && i != SP_EN)
+                x += (127u - x) * set.accent / 100u;
+            v->lmask |= (uint8_t)(1u << i);
+            v->lp[i] = (uint8_t)x;
+        }
+    a = amp_from(vpar(t, v, SP_EN), acc);
+    voice_hit(t, rat_amp(a, 0, n, st_ramp(s)));
+    if (n > 1u) {
+        snd.rat_mask |= 1u << t;
+        snd.rat_gap[t] = STEP_UNITS / pat_bpm2() / n;           /* (the step is FS x 30 / (BPM x 2) samples) */
+        snd.rat_wait[t] = (int32_t)snd.rat_gap[t];
+        snd.rat_amp[t] = (uint16_t)a;
+        snd.rat_k[t] = 1;
+        snd.rat_n[t] = (uint8_t)n;
+        snd.rat_ramp[t] = (uint8_t)st_ramp(s);
+    } else
+        snd.rat_mask &= ~(1u << t);
+}
+
+static int step_chance(const step_t *s)          /* the step's probability, with RANDOM's CHANCE BIAS */
+{
+    int32_t pc = (int32_t)st_prob(s);
+    if (pc >= 100)
+        return 1;                                /* (plain trigs stay solid: the bias moves only the chancy ones) */
+    pc += (int32_t)set.bias - 50;
+    snd.dice = snd.dice * 1664525u + 1013904223u;
+    return (int32_t)((snd.dice >> 16) * 100u >> 16) < pc;
 }
 
 static int audible(uint32_t t, uint32_t solo_any)
@@ -245,10 +323,27 @@ static __attribute__((noinline)) void seq_step(void)   /* the 16th gstep: every 
         int skip = (snd.rec_skip >> t) & 1u && snd.rec_skip_pos[t] == pos;
         snd.pos_pub[t] = (uint8_t)pos;
         snd.rec_skip &= ~(1u << t);              /* (once: the next pass plays it) */
-        if ((s->f & ST_TRIG) && audible(t, solo) && !skip)
-            snd_hit(t, amp_of(t, (s->f & ST_ACC) != 0));
+        if ((s->f & ST_TRIG) && audible(t, solo) && !skip && step_chance(s))
+            step_hit(t, s);
     }
     snd.gstep++;
+}
+
+static __attribute__((noinline)) void rat_block(uint32_t n)   /* the ratchets' repeats due in this block */
+{
+    uint32_t m = snd.rat_mask;
+    while (m) {
+        uint32_t t = (uint32_t)__builtin_ctz(m);
+        m &= m - 1u;
+        snd.rat_wait[t] -= (int32_t)n;
+        while (snd.rat_wait[t] <= 0 && snd.rat_k[t] < snd.rat_n[t]) {
+            voice_hit(t, rat_amp(snd.rat_amp[t], snd.rat_k[t], snd.rat_n[t], snd.rat_ramp[t]));   /* (same locks) */
+            snd.rat_k[t]++;
+            snd.rat_wait[t] += (int32_t)snd.rat_gap[t];
+        }
+        if (snd.rat_k[t] >= snd.rat_n[t])
+            snd.rat_mask &= ~(1u << t);
+    }
 }
 
 static __attribute__((noinline)) void snd_record(uint32_t t, int accent)   /* a pad while REC runs */
@@ -324,7 +419,8 @@ static int voice_quiet(const voice_t *v, uint32_t n)   /* every state near zero:
 static void voice_render(uint32_t t, int32_t *mix, uint32_t n, int32_t gl, int32_t gr)
 {
     voice_t *v = &snd.v[t];
-    const uint8_t *p = kit.t[t].p;
+    const uint8_t p[4] = {(uint8_t)vpar(t, v, 0), (uint8_t)vpar(t, v, 1), (uint8_t)vpar(t, v, 2),
+                          (uint8_t)vpar(t, v, 3)};   /* the step's locks while its sound rings, else the knobs */
     const sk_res_t *res = SK_RES[t];
     uint32_t kind = SK_KIND[t], nres = SK_NRES[t], thr = SK_THR[t][p[SP_OBJ]], i, k;
     int32_t cg = (int32_t)SK_CG[t][p[SP_OBJ]], snd_d = SK_SND[t], outg = SK_OUTG[t];
@@ -428,6 +524,7 @@ static void app_audio(int32_t *out, uint32_t n)
             snd.running = 0;
         } else if (r == 3u || !snd.running) {
             snd.running = 1;
+            snd.rat_mask = 0;
             snd.gstep = 0;
             snd.phase = STEP_UNITS;              /* the first 16th at once */
         }
@@ -453,7 +550,10 @@ static void app_audio(int32_t *out, uint32_t n)
             snd.phase -= STEP_UNITS;
             seq_step();
         }
-    }
+        if (snd.rat_mask)
+            rat_block(n);
+    } else
+        snd.rat_mask = 0;                        /* stopped: no repeats left over */
     snd.running_pub = snd.running;
     for (t = 0; t < NT; t++)                     /* notes out: the note-offs due */
         if (snd.note_off[t] && !--snd.note_off[t])

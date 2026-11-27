@@ -151,8 +151,9 @@ TEMPO, SWING (50..75 %), ACCENT amount (0..100: how much an accent adds to energ
 
 ### RANDOM page (LFO)
 
-HUMANIZE timing (0..10 ms), HUMANIZE energy (0..30 %), a global probability bias (−50..+50 %), and RANDOMIZE
-(press SELECT: randomize the selected track's trigs, with a density on KNOB 4). Details may change in the milestone.
+HUMANIZE timing (0..10 ms), HUMANIZE energy (0..30 %), CHANCE BIAS (−50..+50 %: added to every step whose
+probability is below 100 %; plain trigs stay solid; live since milestone 5), and RANDOMIZE (randomize the selected
+track's trigs, with a DENSITY on KNOB 4). Details may change in the milestone.
 
 ### FX pages (FX)
 
@@ -221,7 +222,11 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
   maps CC 11 to the system decay and CC 4 to the number of objects (`__SK_ShakerDamping_`, `__SK_ShakerNumObjects_`);
   its class comment says the reverse. Found by the reference test; Percolator follows the code. Defaults are
   STK's per-instrument baselines (64 = the instrument's own values; energy default from STK's examples).
-- **Accent:** an accented hit adds the ACCENT amount to the hit's energy (and to locked values that are locked).
+- **Accent:** an accented hit adds the ACCENT amount to the hit's energy (up to a full hit's energy at 100 %), and
+  moves each locked DECAY / OBJECTS / FREQ value towards 127 by ACCENT % (ACCENT 50: a DECAY lock of 40 plays as 83).
+- **Locks:** a step's locks shape the sound it hits for as long as that sound rings (a knob turned meanwhile does
+  not change a locked parameter, but does change the unlocked ones); the track's next hit without locks plays the
+  knobs again. Pads and MIDI notes always play the knobs (the kit). An ENERGY lock sets the hit's amplitude.
 - **Mix:** per track level, pan, delay send, reverb send. Master: chorus (insert), master filter (LP/HP) with
   resonance, drive, level. Pan is a balance law (centre: both channels at the track's level; towards a side the other
   channel falls to zero). After the MASTER level (FX 3) and the MASTER pot, a soft limit: straight up to -6 dBFS
@@ -347,7 +352,10 @@ Each can be tested on the host and heard in the emulator.
    tap restarts), track selection, the grid's playhead, mute / solo, per-track length, patterns saved and loaded (16
    slots, all kept in RAM), queued pattern change at the bar line, live record (no double hit when recorded ahead of
    the playhead). Built mostly in the skeleton; checked on the unit (steady tempo).
-5. **Per-step features:** parameter locks, probability, ratchets with ramps.
+5. **Per-step features (done 2026-11-26):** parameter locks (all four, held while the sound rings, moved by the
+   accent), probability (one roll per step, so a ratcheted step plays all its repeats or none; CHANCE BIAS on the
+   RANDOM page), ratchets x2..x4 spread evenly over the step (FLAT, UP from 40 % to 100 % of the step's amplitude,
+   DOWN the other way; stopping drops the repeats left). Tests prove each against a broken version.
 6. **Conditions and time:** conditional trigs, FILL, nudge, per-track length and clock divide, swing, note repeat.
 7. **MIDI sync:** clock in (EXT / AUTO), clock out, notes out, start / stop / continue.
 8. **Songs and kits:** the SONG screen, chains, 4 songs, 4 kits, the SAVE screen for all three.

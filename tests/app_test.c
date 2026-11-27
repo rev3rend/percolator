@@ -754,6 +754,153 @@ static void sound(void)
         check("REC ahead of the playhead: the next pass plays it", (uint8_t)(snd.hits[8] - h) == 1u);
     }
     snd.rec = 0;
+    {   /* milestone 5: locks, probability, ratchets (track 1, Maraca; 120 BPM: a 16th is 5512.5 samples) */
+        step_t *st = pat.t[0].s;
+        uint32_t i, k, when[8], nw = 0;
+        snd.run_req = 2;
+        host_render(buf, 64);
+        memset(pats, 0, sizeof pats);
+        pat_check(&pat);
+        ring_out();
+        st[0].f = ST_TRIG;
+        st[0].lock[SP_FRQ] = 21;                 /* FREQ 20 */
+        st[0].lock[SP_EN] = 51;                  /* ENERGY 50 */
+        st[1].f = ST_TRIG;                       /* no locks */
+        snd.run_req = 1;
+        host_render(buf, 64);
+        check("lock: the step's FREQ (20) and ENERGY (50 -> amplitude 100) play", snd.v[0].fq == 20u &&
+                                                                                  snd.last_amp[0] == 100u);
+        check("lock: held while the sound rings (the knob's FREQ 64 does not take over)",
+              (snd.v[0].lmask >> SP_FRQ) & 1u && vpar(0, &snd.v[0], SP_FRQ) == 20u);
+        host_render(buf, 5568);                  /* step 2: no locks */
+        check("lock: the next step without locks plays the knobs (FREQ 64, ENERGY 100)", snd.v[0].fq == 64u &&
+                                                                                          snd.v[0].lmask == 0u &&
+                                                                                          snd.last_amp[0] == 200u);
+        snd.run_req = 2;
+        host_render(buf, 64);
+        ring_out();
+        st[1].f = 0;
+        st[0].lock[SP_EN] = 0;
+        st[0].lock[SP_FRQ] = 0;
+        st[0].lock[SP_DEC] = 41;                 /* DECAY 40 */
+        st[0].f = ST_TRIG | ST_ACC;
+        set.accent = 50;
+        snd.run_req = 1;
+        host_render(buf, 64);
+        check("accent: a locked DECAY 40 moved half way to 127 (83)", snd.v[0].lp[SP_DEC] == 83u);
+        set.accent = 40;
+        snd.run_req = 2;
+        host_render(buf, 64);
+        {   /* a DECAY lock really decays faster: the energy after 50 ms, DECAY 0 locked against the knob's 64 */
+            int32_t e_lock, e_free;
+            ring_out();
+            st[0].f = ST_TRIG;
+            st[0].lock[SP_DEC] = 1;              /* DECAY 0 */
+            snd.run_req = 1;
+            host_render(buf, 2208);
+            e_lock = snd.v[0].e;
+            snd.run_req = 2;
+            host_render(buf, 64);
+            ring_out();
+            st[0].lock[SP_DEC] = 0;
+            snd.run_req = 1;
+            host_render(buf, 2208);
+            e_free = snd.v[0].e;
+            snd.run_req = 2;
+            host_render(buf, 64);
+            check("lock: DECAY 0 decays faster than the knob's 64", e_lock < e_free / 2);
+        }
+        /* probability: every step 50 % for 200 steps; 0 %; and with CHANCE BIAS +50 */
+        ring_out();
+        for (k = 0; k < NSTEP; k++) {
+            st[k].f = ST_TRIG;
+            st[k].prob = 10;                     /* 50 % */
+        }
+        {   /* (counted render by render: the hit counter is a byte) */
+            uint32_t n50 = 0, n0 = 0, nb = 0, j;
+            uint8_t h;
+            snd.run_req = 1;
+            for (j = 0; j < 200u; j++) {      /* ~a 16th each (5512.5): 200 renders ~ 201 steps */
+                h = snd.hits[0];
+                host_render(buf, 5536);
+                n50 += (uint8_t)(snd.hits[0] - h);
+            }
+            for (k = 0; k < NSTEP; k++)
+                st[k].prob = 20;                 /* 0 % */
+            for (j = 0; j < 50u; j++) {
+                h = snd.hits[0];
+                host_render(buf, 5536);
+                n0 += (uint8_t)(snd.hits[0] - h);
+            }
+            for (k = 0; k < NSTEP; k++)
+                st[k].prob = 10;
+            set.bias = 100;                      /* +50 % */
+            for (j = 0; j < 50u; j++) {
+                h = snd.hits[0];
+                host_render(buf, 5536);
+                nb += (uint8_t)(snd.hits[0] - h);
+            }
+            set.bias = 50;
+            snd.run_req = 2;
+            host_render(buf, 64);
+            printf("  probability 50 %%: %u of ~201 steps\n", n50);
+            check("probability 50 %: about half the steps play (70..130 of ~201)", n50 >= 70u && n50 <= 130u);
+            check("probability 0 %: none play", n0 == 0u);
+            check("CHANCE BIAS +50: a 50 % step always plays", nb >= 49u);
+        }
+        /* ratchets: x4 UP on step 1 alone; the repeats' times and amplitudes */
+        ring_out();
+        for (k = 0; k < NSTEP; k++)
+            st[k] = (step_t){0};
+        st[0].f = ST_TRIG;
+        st[0].rat = (uint8_t)(3u | 1u << 2);     /* x4, UP */
+        {
+            uint8_t h = snd.hits[0];
+            uint16_t amps[8];
+            snd.run_req = 1;
+            for (i = 0; i < 5536u / 32u; i++) {  /* one 16th, block by block */
+                host_render(buf, 32);
+                if (snd.hits[0] != h && nw < 8u) {
+                    h = snd.hits[0];
+                    amps[nw] = snd.last_amp[0];
+                    when[nw++] = i * 32u;
+                }
+            }
+            snd.run_req = 2;
+            host_render(buf, 64);
+            check("ratchet x4: four hits in the step", nw == 4u);
+            check("ratchet x4: evenly spaced (~1378 samples, a 16th / 4)",
+                  nw == 4u && abs((int)(when[1] - when[0]) - 1378) <= 40 && abs((int)(when[3] - when[2]) - 1378) <= 40);
+            check("ratchet UP: 40 %, 60 %, 80 %, 100 % of the step's 200", nw == 4u && amps[0] == 80u &&
+                                                                           amps[1] == 120u && amps[2] == 160u &&
+                                                                           amps[3] == 200u);
+            st[0].rat = (uint8_t)(2u | 2u << 2); /* x3, DOWN */
+            nw = 0;
+            h = snd.hits[0];
+            snd.run_req = 1;
+            for (i = 0; i < 5536u / 32u; i++) {
+                host_render(buf, 32);
+                if (snd.hits[0] != h && nw < 8u) {
+                    h = snd.hits[0];
+                    amps[nw++] = snd.last_amp[0];
+                }
+            }
+            snd.run_req = 2;
+            host_render(buf, 64);
+            check("ratchet x3 DOWN: 100 %, 70 %, 40 %", nw == 3u && amps[0] == 200u && amps[1] == 140u &&
+                                                       amps[2] == 80u);
+            st[0].rat = 3u;                      /* x4 FLAT, stopped half way */
+            h = snd.hits[0];
+            snd.run_req = 1;
+            host_render(buf, 1408);              /* the first hit and one repeat */
+            snd.run_req = 2;
+            host_render(buf, 5536);
+            check("ratchet: stopping drops the repeats left", (uint8_t)(snd.hits[0] - h) == 2u);
+        }
+        memset(pats, 0, sizeof pats);
+        pat_check(&pat);
+        ring_out();
+    }
     while (host_midi_out(&pkt))
         ;
     set.notes_out = 1;

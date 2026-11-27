@@ -367,7 +367,7 @@ static const param_t PP[NPAGES][4] = {
     {{"TEMPO", 80, 480, K_BPM2, 1, 0}, {"SWING", 50, 75, K_PCT, 0, 0},
      {"ACCENT", 0, 100, K_PCT, 1, 0}, {"REPEAT RATE", 0, NREP - 1, K_LIST, 0, REP_NAME}},
     {{"HUMAN TIME", 0, 10, K_MS, 0, 0}, {"HUMAN ENERGY", 0, 30, K_PCT, 0, 0},
-     {"CHANCE BIAS", 0, 100, K_OFF50, 0, 0}, {"DENSITY", 0, 100, K_PCT, 0, 0}},
+     {"CHANCE BIAS", 0, 100, K_OFF50, 1, 0}, {"DENSITY", 0, 100, K_PCT, 0, 0}},
     {{"TIME", 0, 7, K_LIST, 0, DLY_NAME}, {"FEEDBACK", 0, 100, K_PCT, 0, 0},
      {"TONE", 0, 100, K_PCT, 0, 0}, {"LEVEL", 0, 100, K_PCT, 0, 0}},
     {{"SIZE", 0, 100, K_PCT, 0, 0}, {"DAMPING", 0, 100, K_PCT, 0, 0},

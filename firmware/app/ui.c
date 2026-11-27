@@ -864,7 +864,6 @@ static void step_edit_enc(uint32_t role, int32_t s)   /* an encoder while a step
         idx = clampi(idx + s, 0, 9);
         r = idx == 0 ? 1 : 2 + (idx - 1) / 3;
         st->rat = (uint8_t)((st->rat & 0xF0u) | (uint32_t)(r - 1) | (uint32_t)(idx == 0 ? 0 : (idx - 1) % 3) << 2);
-        msg("RATCHETS PLAY IN MILESTONE 5");
     } else if (role == EN_PRESET) {
         int32_t c = clampi((int32_t)st_cond(st) + s, 0, NCOND - 1);
         st->f = (uint8_t)((st->f & 3u) | (uint32_t)c << 2);
