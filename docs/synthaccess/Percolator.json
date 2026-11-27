@@ -1,0 +1,34 @@
+{
+  "device": {
+    "name": "Percolator",
+    "manufacturer": "R. Luke DuBois (custom firmware for the M-VAVE FM-1)",
+    "language": "en-US",
+    "version": 1,
+    "program_change": {
+      "0": {
+        "label": "pattern",
+        "data": "enum",
+        "enum": "patterns"
+      }
+    },
+    "CC": {
+      "1": {
+        "label": "frequency",
+        "data": "value"
+      },
+      "2": {
+        "label": "energy",
+        "data": "value"
+      },
+      "4": {
+        "label": "objects",
+        "data": "value"
+      },
+      "11": {
+        "label": "decay",
+        "data": "value"
+      }
+    },
+    "patterns": ["1, samba", "2, son clave", "3, african bell", "4, tambourine soul", "5, bossa", "6, shuffle", "7, rain", "8, glass garden", "9, tide", "10, night bugs", "11, monsoon", "12, wind chimes", "13, workshop", "14, coins", "15, shop floor", "16, clank", "17, pipes", "18, machine", "19, polymeter", "20, probability field", "21, conditions", "22, tick drift", "23, fibonacci", "24, euclid", "25", "26", "27", "28", "29", "30", "31", "32"]
+  }
+}

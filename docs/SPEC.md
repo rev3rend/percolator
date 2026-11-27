@@ -184,7 +184,7 @@ FX 4 REVERB: SIZE, DAMPING, LEVEL, and MASTER (the kit's output level). All are 
 
 GLOBAL 3: KIT FOLLOWS PATTERN (on / off, default on) and FACTORY RESTORE (SAVE: see "What is stored").
 GLOBAL: MIDI channel (1..16, OMNI), base note (default 53 = F3), CLOCK source (INT / EXT / AUTO), TRS MIDI IN (on / off,
-default on); GLOBAL 2: CLOCK OUT (on / off), NOTES OUT (on / off), and the CPU meter (read-only rows): CPU LOAD, the
+default on); GLOBAL 2: CLOCK OUT (on / off), MIDI OUT (on / off: notes, CCs, Program Change), and the CPU meter (read-only rows): CPU LOAD, the
 audio ISR's average share of its 2.9 ms half (the platform's `audio_cpu_q8`, ~93 ms), and CPU PEAK, the worst single
 half in the last 2..4 s (`audio_max_us`: what decides a crackle), with LATE n when halves have missed their deadline
 since power-on (`felucca_dbg.late`: audible glitches). HOME's header rule is the same meter, always visible: the
@@ -358,17 +358,39 @@ records (a pattern saved later into P17..P21 replaces the old records there).
   MIDI clock, start, stop, continue and song position as the clock source says (Timing, "MIDI clock"). Note-offs are ignored
   (the models decay on their own), but an all-notes-off / all-sound-off (CC 123 / 120) silences every track.
 - **Out (USB only):** clock, start and stop when INT and CLOCK OUT is on; every played trig and pad as a
-  note (base note + track, velocity from energy, a short note-off after) when NOTES OUT is on.
-- **Screen reader (fm1-reader):** the FM-1 speaks through the fm1-reader screen reader
+  note (base note + track, velocity from energy, a short note-off after) when MIDI OUT is on (named NOTES OUT until
+  2026-11-27); with it, the selected track's four sounds as CC 2 / 11 / 4 / 1 when a knob (or the SOUND page) changes
+  them, and the pattern starting as Program Change 0..31. A change of track or kit sends nothing (no burst); what
+  came in as a CC is not sent back. Sent from the audio ISR (the platform's MIDI out queue is the ISR's).
+- **Screen reader (fm1-reader, built 2026-11-27):** the FM-1 speaks through the fm1-reader screen reader
   (https://charlesvestal.github.io/fm1-reader/, protocol version 1), as in Solinaesque: USB-MIDI SysEx
-  `F0 7D 53 52 <cmd> ... F7`, silent until a reader's HELLO, a HELLO answer naming "PERCOLATOR v0.1", SAY messages
-  for what the player caused (pages and their values, knob turns debounced, track selection with the track's full
-  name, step edits "step 5 on, accent, probability 50 percent", pattern changes, saves, play / stop / record) and
-  WHERE reading the whole screen (the grid as a summary: "pattern 3, playing, 120 BPM, selected Tambourine, steps 1,
-  5, 9, 13"). Wording per fm1-reader's RULES.md. Needs the platform's `app_sysex()` hook, ported from Solinaesque.
+  `F0 7D 53 52 <cmd> ... F7`; silent until a reader's HELLO (every 2 s; silent again 5 s after the last, or on BYE);
+  the HELLO answer names the firmware ("PERCOLATOR v0.1"; an empty words link: it speaks in full words); SAY messages
+  (ASCII, at most 160 characters: the platform's SysEx queue holds 64 packets; a longer readout goes in parts) with
+  NOW for what the player caused and KEEP for warnings; WHERE (and the first HELLO) reads the whole screen. What is
+  said (`speak.c`):
+  - GRID: "grid. pattern 1, samba. kit 1, studio. 104 beats per minute, stopped. track 1, maraca. energy 100, decay
+    64, objects 64, frequency 64." TRACK view: the track, its length and "steps on: 1 accent, 5, 9 locked".
+  - a track picked (SELECT, EDIT + key): "track 9, sticks" (muted / solo) and its sounds or steps; a knob, once it
+    settles (120 ms, at least every ~500 ms while turning): "decay 80"; the tempo: "108 beats per minute".
+  - STEP mode: a step key tapped: "step 5 on" / "off" / "accent"; held: "step 5, on, chance 100 percent, ratchet 2
+    up, condition 1 of 2, nudge late 2, energy lock 80", then each edit ("energy lock 90", "condition fill").
+  - patterns: the PRESETS message ("next pattern 7 rain"); a pattern starting while playing (a queue at the bar
+    line, a song): "pattern 7, rain", with the kit it brought; "playing", "stopped", "following MIDI clock".
+  - pages: the name and the values ("effects 3, delay page. time dotted eighth notes, feedback 50 percent, ...");
+    note values, clock divides ("half speed"), pan ("left 12"), notes ("C sharp 3") in words.
+  - SAVE: what, the slot, what it replaces, the name and how to edit it; each edit ("position 2, letter L", "kit,
+    kit 4, replaces a factory kit. name glass garden"). SONG: the song and the entry ("entry 3, pattern 3, african
+    bell, 2 times"), each edit. FACTORY RESTORE: the question.
+  - every message ("sticks muted", "locks cleared, step 5"); a failure (SAVE FAILED, SETTINGS NOT SAVED) as a warning.
+  Wording per fm1-reader's RULES.md: full words (the tracks' full names, "pattern 7" for P07), no symbols. Never
+  blocks: a message the USB queue has no room for is dropped. The platform's main loop calls the app's `app_sysex()`
+  hook (ported from Solinaesque) before the update entry; it takes only frames starting 7D 53 52.
 - **MIDItoSpeech sidecar** (`docs/synthaccess/Percolator.json`, for https://github.com/IDMNYU/synthaccess
-  MIDItoSpeech): what the FM-1 sends (the notes as track names, the CCs as parameter names and values), generated
-  from the firmware's tables (`tools/gen_synthaccess.c`) and checked by the suite against what is sent.
+  MIDItoSpeech, built 2026-11-27): what MIDI OUT sends that MIDItoSpeech reads: CC 1 / 2 / 4 / 11 as frequency,
+  energy, objects, decay (the value, 0..127, as the screen shows it), Program Change as "pattern" with the 32 slots
+  (the factory ones by name: "7, rain"). Notes and clock are left out (MIDItoSpeech reads controls). Generated from
+  the firmware's tables and the reader's own wording (`tools/gen_synthaccess.c`); the suite checks it is current.
 - **USB name:** "Percolator FM-1" (the USB product string, firmware/src/usb.c, changed on request 2026-11-26 as in
   Solinaesque and Looching 2026); it keeps "FM-1", by which fm1_install.py and the web installer find the unit. The
   update loader stays "Felucca Update"; the package identity stays FM-1_900. Release builds are named
@@ -466,6 +488,9 @@ Each can be tested on the host and heard in the emulator.
    factory), 8 songs (S1..S4 factory tours), the kit link, KIT FOLLOWS PATTERN and FACTORY RESTORE on GLOBAL 3, the
    old layout migrated. Tests: the fresh unit's content, every factory pattern sounding, the kit link on and off and
    saved, the migration written once, the restore through the UI; each proved against a broken version.
-10. **Accessibility:** fm1-reader (the `app_sysex` hook from Solinaesque, `sr.c`, `speak.c`), the MIDItoSpeech
-    sidecar.
+10. **Accessibility (built 2026-11-27):** the fm1-reader screen reader (MIDI, "Screen reader": `sr.c`, `speak.c`,
+    the `app_sysex` hook from Solinaesque) and the MIDItoSpeech sidecar, with MIDI OUT's CCs and Program Change for
+    it. Tests: the HELLO answer byte for byte, silence before HELLO and after BYE / 5 s, the update frames left alone,
+    what every screen says and each edit, every page's readout and every track's name within the rules, a full
+    queue; the CCs, Program Change, no burst and no echo; each proved against a broken version.
 11. **The web:** GitHub Pages with the emulator and the web installer, release builds.

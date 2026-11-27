@@ -17,7 +17,8 @@
 #   ISR budget   the audio and scan ISRs' loop cost in the pi32v2 disassembly, +10 % (target_budget.py)
 # APP (firmware/app/; change these with the app):
 #   app          the app on the host platform: screens, layout lint, LEDs, its record in flash, sound, MIDI
-#                (app_test.c; build/shots/)
+#                (app_test.c; build/shots/); the screen reader (fm1-reader protocol, what is said)
+#   sidecar      docs/synthaccess/Percolator.json (MIDItoSpeech): as generated from the firmware, its CCs and patterns
 #   shakers      the Shakers engine against STK's own Shakers built from tests/stk/ (shakers_ref.cpp renders STK,
 #                shakers_test.c compares every instrument: centroid, decay, level)
 # WEB:
@@ -71,7 +72,10 @@ run "ISR budget: target cost of the audio and scan ISRs (pi32v2 disassembly)" py
 # ---------------------------------------------------------------- app
 # shellcheck disable=SC2086
 $CC $APP_FLAGS -o "$OUT/app_test" tests/app_test.c -lm
-run "app: screens, layout, LEDs, its record in flash, sound, MIDI (build/shots/)" "$OUT/app_test"
+run "app: screens, layout, LEDs, its record in flash, sound, MIDI, the reader (build/shots/)" "$OUT/app_test"
+$CC $APP_FLAGS -o "$OUT/gen_synthaccess" tools/gen_synthaccess.c -lm
+run "MIDItoSpeech sidecar: current, its CCs and patterns as the firmware sends them" python3 tests/synthaccess_check.py \
+    "$OUT/gen_synthaccess" docs/synthaccess/Percolator.json firmware/app/sound.c
 CXX="${CXX:-c++}"
 if command -v "${CXX%% *}" >/dev/null 2>&1; then
     # shellcheck disable=SC2086

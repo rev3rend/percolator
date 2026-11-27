@@ -1759,14 +1759,14 @@ static void sound(void)
     fm1_in.notes = 1u << 2;
     host_render(buf, 64);
     fm1_in.notes = 0;
-    check("NOTES OUT: a pad sends its note-on (base + 2)", host_midi_out(&pkt) && ((pkt >> 8) & 0xF0u) == 0x90u &&
+    check("MIDI OUT: a pad sends its note-on (base + 2)", host_midi_out(&pkt) && ((pkt >> 8) & 0xF0u) == 0x90u &&
                                                            ((pkt >> 16) & 0x7Fu) == 55u);
     host_render(buf, 64u * 32u + 64u);
     {
         int off = 0;
         while (host_midi_out(&pkt))
             off |= ((pkt >> 8) & 0xF0u) == 0x80u && ((pkt >> 16) & 0x7Fu) == 55u;
-        check("NOTES OUT: its note-off ~46 ms later", off);
+        check("MIDI OUT: its note-off ~46 ms later", off);
     }
     set.notes_out = 0;
     pat.t[0].s[0].f = ST_TRIG;
@@ -1812,6 +1812,345 @@ static void sound(void)
     check("midi_out: a USB-MIDI note-on packet", host_midi_out(&pkt) && pkt == (0x09u | 0x90u << 8 | 60u << 16 | 100u << 24));
 }
 
+/* ---------------------------------------------------------------- the screen reader (fm1-reader) --- */
+static uint32_t rd_pos;                                  /* how far host_sx_out has been read */
+static char rd_text[24][200];
+static uint8_t rd_flags[24], rd_cmd[24];
+static uint32_t rd_n, rd_bad;                            /* frames read; texts breaking the wording rules */
+
+static void rd_take(void)                                /* the frames sent since the last call */
+{
+    rd_n = 0;
+    while (rd_pos < host_sx_out_len) {
+        uint32_t a = rd_pos, b = a, k = 0, i;
+        while (b < host_sx_out_len && host_sx_out[b] != 0xF7)
+            b++;
+        rd_pos = b + 1u;
+        if (rd_n >= 24u || host_sx_out[a] != 0xF0 || b - a < 6u)
+            continue;
+        rd_cmd[rd_n] = host_sx_out[a + 4u];
+        rd_flags[rd_n] = host_sx_out[a + 5u];
+        for (i = a + 6u; i < b && k + 1u < sizeof rd_text[0]; i++)
+            rd_text[rd_n][k++] = host_sx_out[i] ? (char)host_sx_out[i] : '|';   /* (the HELLO's 00 shown as |) */
+        rd_text[rd_n][k] = 0;
+        if (rd_cmd[rd_n] == 16u) {                       /* a SAY: ASCII, <= 160, none of the symbols RULES.md bars */
+            const char *t = rd_text[rd_n];
+            int bad = k > 160u || !k;
+            for (i = 0; t[i]; i++)
+                bad |= t[i] < 32 || t[i] > 126 || strchr("/|><*_=#[]{}~^@&$+", t[i]) != 0;
+            for (i = 0; i < NT; i++)             /* no screen abbreviation of a track left */
+                if (strstr(t, SK_SHORT[i]))
+                    bad = 1;
+            if (bad) {
+                printf("  (against the rules: \"%s\")\n", t);
+                rd_bad++;
+            }
+        }
+        rd_n++;
+    }
+}
+
+static int rd_has(const char *start, uint32_t flags)     /* a SAY beginning so, with those flags, was among them */
+{
+    uint32_t i;
+    for (i = 0; i < rd_n; i++)
+        if (rd_cmd[i] == 16u && rd_flags[i] == flags && !strncmp(rd_text[i], start, strlen(start)))
+            return 1;
+    return 0;
+}
+
+static int rd_in(const char *part)                       /* a SAY holding this */
+{
+    uint32_t i;
+    for (i = 0; i < rd_n; i++)
+        if (rd_cmd[i] == 16u && strstr(rd_text[i], part))
+            return 1;
+    return 0;
+}
+
+static void rd_hello(void);
+static void rd_frames(uint32_t n)                        /* frames (and audio), collecting what was said; a HELLO */
+{                                                        /* every 2 s, as a reader sends it */
+    static char all[24][200];
+    static uint8_t af[24], ac[24];
+    static uint32_t since;
+    uint32_t got = 0, i;
+    while (n--) {
+        if (++since >= 2000u / 16u && sr_on()) {
+            since = 0;
+            rd_hello();
+        }
+        host_render(buf_small, 704);             /* (16 ms of audio: the ISR's pattern changes, the transport) */
+        host_frame();
+        rd_take();
+        for (i = 0; i < rd_n && got < 24u; i++, got++) {
+            memcpy(all[got], rd_text[i], sizeof all[0]);
+            af[got] = rd_flags[i];
+            ac[got] = rd_cmd[i];
+        }
+    }
+    for (i = 0; i < got; i++) {
+        memcpy(rd_text[i], all[i], sizeof all[0]);
+        rd_flags[i] = af[i];
+        rd_cmd[i] = ac[i];
+    }
+    rd_n = got;
+}
+
+static void rd_show(const char *what)
+{
+    uint32_t i;
+    for (i = 0; i < rd_n; i++)
+        if (rd_cmd[i] == 16u)
+            printf("  (%s: \"%s\")\n", what, rd_text[i]);
+}
+
+static void rd_hello(void)
+{
+    static const uint8_t HELLO[] = {0x7D, 0x53, 0x52, 0x01, 0x01};
+    host_sysex_in(HELLO, sizeof HELLO);
+}
+
+static void reader(void)
+{
+    static const uint8_t BYE[] = {0x7D, 0x53, 0x52, 0x02}, WHERE[] = {0x7D, 0x53, 0x52, 0x03},
+                         UPDATE[] = {0x22, 0x24, 0x35, 0x00, 0x00};
+    uint8_t ANSWER[7u + sizeof SR_NAME];         /* F0 7D 53 52 01 01 <SR_NAME> 00 F7 */
+    uint32_t i;
+    memcpy(ANSWER, (const uint8_t[]){0xF0, 0x7D, 0x53, 0x52, 0x01, 0x01}, 6u);
+    memcpy(ANSWER + 6u, SR_NAME, sizeof SR_NAME - 1u);
+    ANSWER[5u + sizeof SR_NAME] = 0x00;
+    ANSWER[6u + sizeof SR_NAME] = 0xF7;
+    host_nor_erase();
+    power_cycle();                               /* the factory set: P01 SAMBA, K1 STUDIO */
+    host_sx_out_len = rd_pos = 0;
+    rd_bad = 0;
+    host_turn(EN_K1, 3);
+    press(B_ENV);
+    frames(20);
+    check("reader: silent until a HELLO (nothing sent)", host_sx_out_len == 0u);
+    host_sysex_in(UPDATE, sizeof UPDATE);        /* the update protocol's frame: not the app's */
+    host_frame();
+    check("reader: another SysEx frame is left for the update entry", host_sx_ready && host_sx_out_len == 0u);
+    host_sx_ready = 0;
+    press(B_HOME);
+    rd_hello();
+    host_frame();
+    check("reader: HELLO answered, byte for byte (F0 7D 53 52 01 01 PERCOLATOR <version> 00 F7)",
+          host_sx_out_len >= sizeof ANSWER && !memcmp(host_sx_out, ANSWER, sizeof ANSWER) && !host_sx_ready);
+    rd_frames(10);
+    rd_show("whole screen");
+    check("reader: a new reader hears the whole screen (GRID: pattern, kit, tempo, track, its sounds)",
+          rd_has("grid. pattern 1, samba. kit 1, studio. 104 beats per minute, stopped. track 1, maraca.", SR_NOW) &&
+              rd_in("energy "));
+
+    host_turn(EN_K2, 2);                         /* KNOB 2: decay, once it settles */
+    rd_frames(2);
+    check("reader: a knob: nothing while it is still moving", rd_n == 0u);
+    rd_frames(10);
+    check("reader: a knob: \"decay N\" once it settles", rd_n == 1u && rd_has("decay ", SR_NOW));
+    host_turn(EN_SELECT, 8);                     /* SELECT: another track */
+    rd_frames(20);
+    rd_show("track");
+    check("reader: SELECT: \"track 9, sticks. energy ...\"", rd_has("track 9, sticks. energy ", SR_NOW));
+    host_turn(EN_ALGO, 4);
+    rd_frames(12);
+    check("reader: ALGORITHM: \"108 beats per minute\"", rd_has("108 beats per minute", SR_NOW));
+    host_turn(EN_PRESET, 6);                     /* PRESETS, stopped: the message; then the kit it brought */
+    rd_frames(20);
+    rd_show("pattern");
+    check("reader: PRESETS: \"pattern 7 rain\" (the message, no label doubled)", rd_has("pattern 7 rain", SR_NOW));
+    check("reader: KIT FOLLOWS PATTERN: \"kit 3, rain room\"", rd_has("kit 3, rain room", 0));
+    host_press(B_EDIT, 1);                       /* EDIT + PRESETS: the kit's message */
+    host_frame();
+    host_turn(EN_PRESET, 1);
+    frames(3);
+    host_press(B_EDIT, 0);
+    rd_frames(10);
+    check("reader: EDIT + PRESETS: \"kit 4 glass garden\"", rd_has("kit 4 glass garden", SR_NOW));
+
+    press(B_PLAY);                               /* the transport */
+    rd_frames(10);
+    check("reader: PLAY: \"playing\"", rd_has("playing", SR_NOW));
+    host_turn(EN_PRESET, 1);                     /* playing: the next pattern at the bar line, in full */
+    rd_frames(260);
+    rd_show("queued");
+    check("reader: a queued pattern starting: \"pattern 8, glass garden\"", rd_has("pattern 8, glass garden", 0));
+    press(B_PLAY);
+    rd_frames(10);
+    check("reader: PLAY again: \"stopped\"", rd_has("stopped", SR_NOW));
+
+    press(B_HOME);                               /* HOME on HOME: the TRACK view */
+    rd_frames(20);
+    rd_show("track view");
+    check("reader: the TRACK view: the track, its length, its steps", rd_has("track view. track 9, sticks. length ", SR_NOW) &&
+                                                                    rd_in("steps on"));
+    press(B_SEQ);
+    rd_frames(10);
+    check("reader: SEQ: \"step mode\"", rd_has("step mode", SR_NOW));
+    {
+        uint32_t was = pat.t[8].s[1].f & ST_TRIG;
+        key_tap(step_key(1));
+        rd_frames(4);
+        rd_show("step key");
+        check("reader: a step key: \"step 2 on\" / \"step 2 off\"", rd_has(was ? "step 2 off" : "step 2 on", SR_NOW));
+    }
+    fm1_in.notes |= 1u << step_key(1);           /* hold step 2: its settings; KNOB 1: a lock */
+    rd_frames(10);
+    rd_show("step held");
+    check("reader: a step held: \"step 2, on, chance 100 percent\"", rd_has("step 2, ", SR_NOW) && rd_in("chance "));
+    host_turn(EN_K1, 5);
+    rd_frames(12);
+    rd_show("lock");
+    check("reader: a lock: \"energy lock N\"", rd_has("energy lock ", SR_NOW));
+    host_turn(EN_PRESET, 1);
+    rd_frames(12);
+    check("reader: a condition: \"condition 1 of 2\"", rd_has("condition 1 of 2", SR_NOW));
+    fm1_in.notes = 0;
+    rd_frames(10);
+    press(B_SEQ);
+    rd_frames(10);
+    press(B_HOME);
+    rd_frames(20);
+
+    press(B_FX);                                 /* a page; a knob on it */
+    press(B_FX);
+    press(B_FX);
+    rd_frames(20);
+    rd_show("page");
+    check("reader: FX 3: \"effects 3, delay page. time ...\"", rd_has("effects 3, delay page. time ", SR_NOW));
+    host_turn(EN_K1, 1);
+    rd_frames(12);
+    rd_show("page knob");
+    check("reader: a page knob: the delay time as a note value", rd_has("time ", SR_NOW) && rd_in(" note"));
+    press(B_HOME);
+    rd_frames(20);
+
+    rd_hello();
+    press(B_SAVE);                               /* SAVE: the screen, then each edit */
+    rd_frames(30);
+    rd_show("save");
+    check("reader: SAVE: what, the slot, the name, how to edit", rd_has("save pattern to pattern 8, replaces a factory "
+                                                                        "pattern. name glass garden.", SR_NOW));
+    host_turn(EN_K2, 1);
+    rd_frames(12);
+    check("reader: SAVE: a letter -> \"position 1, letter H\"", rd_has("position 1, letter H", SR_NOW));
+    host_turn(EN_K1, 1);
+    rd_frames(12);
+    check("reader: SAVE: the cursor -> \"position 2, letter L\"", rd_has("position 2, letter L", SR_NOW));
+    host_turn(EN_SELECT, 1);
+    rd_frames(12);
+    rd_show("save kit");
+    check("reader: SAVE: SELECT -> \"kit, kit 4, replaces a factory kit. name glass garden\"",
+          rd_has("kit, kit 4, replaces a factory kit. name glass garden", SR_NOW));
+    press(B_HOME);
+    rd_frames(10);
+    check("reader: SAVE cancelled: \"save cancelled\"", rd_has("save cancelled", SR_NOW));
+    rd_frames(30);
+
+    song_screen(1);                              /* SONG: the song and the entry; each edit */
+    rd_frames(30);
+    rd_show("song");
+    check("reader: SONG: \"song screen. song 1, loop, 6 entries. entry 1, pattern 1, samba, 2 times\"",
+          rd_has("song screen. song 1, loop, 6 entries. entry 1, pattern 1, samba, 2 times.", SR_NOW));
+    host_turn(EN_SELECT, 2);
+    rd_frames(12);
+    check("reader: SONG: SELECT -> \"entry 3, pattern 3, african bell, 2 times\"",
+          rd_has("entry 3, pattern 3, african bell, 2 times", SR_NOW));
+    host_turn(EN_K1, 1);
+    rd_frames(12);
+    check("reader: SONG: KNOB 1 -> \"..., 3 times\"", rd_has("entry 3, pattern 3, african bell, 3 times", SR_NOW));
+    song_screen(0);
+    rd_frames(30);
+
+    for (i = 0; i < NPAGES; i++) {               /* WHERE on every page: the whole page, within the rules */
+        rd_hello();
+        page_open(i);
+        rd_frames(30);
+        host_sysex_in(WHERE, sizeof WHERE);
+        rd_frames(4);
+        if (!rd_in(" page")) {
+            printf("  (WHERE on page %u: nothing)\n", i);
+            rd_bad++;
+        }
+    }
+    press(B_HOME);
+    rd_frames(30);
+    for (i = 0; i < NT; i++) {                   /* every track's name, in both views */
+        rd_hello();
+        track_select(i);
+        rd_frames(16);
+    }
+    press(B_HOME);
+    rd_frames(30);
+    press(B_HOME);
+    press(B_HOME);
+    rd_frames(30);
+    check("reader: every text ASCII, <= 160 characters, no symbol or abbreviation RULES.md bars", rd_bad == 0u);
+
+    host_sx_room = 0;                            /* the USB queue full: dropped, nothing waits */
+    {
+        uint32_t d0 = sr.dropped, len0 = host_sx_out_len;
+        host_turn(EN_K1, 1);
+        frames(20);
+        check("reader: the USB queue full: the message dropped, nothing sent, no wait",
+              host_sx_out_len == len0 && sr.dropped > d0);
+    }
+    host_sx_room = 64;
+    rd_frames(20);
+    host_sysex_in(BYE, sizeof BYE);
+    rd_frames(2);
+    host_turn(EN_K1, 1);
+    rd_frames(20);
+    check("reader: BYE: silent again", rd_n == 0u && !sr_on());
+    rd_hello();
+    rd_frames(3);
+    check("reader: HELLO after BYE: the whole screen again", rd_has("grid.", SR_NOW));
+    frames(5000u / 16u + 10u);                   /* no HELLO for 5 s: gone */
+    check("reader: no HELLO for 5 s: silent", !sr_on());
+    host_sx_out_len = rd_pos = 0;
+}
+
+/* MIDI OUT: the knobs as CCs, the pattern as Program Change (what MIDItoSpeech reads) */
+static void notes_ctl(void)
+{
+    uint32_t pkt, n, cc = 0, v = 0, pc = 0xFFu;
+    host_nor_erase();
+    power_cycle();
+    set.notes_out = 1;
+    host_render(buf_small, 64);
+    while (host_midi_out(&pkt))
+        ;
+    check("MIDI OUT: nothing sent at power-on", 1);
+    host_turn(EN_K2, 3);                         /* HOME, KNOB 2: decay of the selected track */
+    host_frame();
+    host_render(buf_small, 64);
+    for (n = 0; host_midi_out(&pkt);)
+        if (((pkt >> 8) & 0xF0u) == 0xB0u)
+            n++, cc = (pkt >> 16) & 0x7Fu, v = (pkt >> 24) & 0x7Fu;
+    check("MIDI OUT: a knob sends its CC (KNOB 2: CC 11, the value)", n == 1u && cc == 11u && v == kit.t[sel()].p[SP_DEC]);
+    track_select(5);                             /* another track: nothing sent */
+    host_frame();
+    host_render(buf_small, 64);
+    check("MIDI OUT: another track: no CCs", !out_count(0xB0u, &n));
+    host_midi(0xB0, 4, 99);                      /* CC in: taken, not sent back */
+    host_render(buf_small, 64);
+    host_render(buf_small, 64);
+    check("MIDI OUT: CC 4 in sets objects, and is not echoed", kit.t[5].p[SP_OBJ] == 99u && !out_count(0xB0u, &n));
+    queue_pattern(6);
+    host_render(buf_small, 64);
+    host_render(buf_small, 64);
+    while (host_midi_out(&pkt))
+        if (((pkt >> 8) & 0xF0u) == 0xC0u)
+            pc = (pkt >> 16) & 0x7Fu;
+    check("MIDI OUT: a pattern starting sends Program Change (P07: 6)", pc == 6u);
+    set.notes_out = 0;
+    host_turn(EN_K1, 2);
+    host_frame();
+    host_render(buf_small, 64);
+    check("MIDI OUT off: no CCs", !out_count(0xB0u, &n));
+}
+
 int main(void)
 {
     if (system("mkdir -p build/shots"))
@@ -1819,6 +2158,8 @@ int main(void)
     screens();
     persistence();
     sound();
+    reader();
+    notes_ctl();
     puts(failed ? "APP TEST FAILED" : "app test passed");
     return failed ? 1 : 0;
 }

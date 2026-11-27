@@ -6,7 +6,9 @@
  *   data.c    the tracks, the kit, the patterns, the settings, the songs, their records; the page parameters
  *   fx.c      the effects chain on the mix (FPU): filter / drive (pre or post), chorus, delay, reverb
  *   sound.c   the audio ISR: the 23 Shakers voices, the pads, MIDI in, notes out, the step clock, the chain
- *   ui.c      the panel: controls, LEDs, the HOME (GRID / TRACK), page, SAVE and SONG screens */
+ *   sr.c      the screen reader link (fm1-reader protocol): SysEx in and out, never blocking
+ *   ui.c      the panel: controls, LEDs, the HOME (GRID / TRACK), page, SAVE and SONG screens
+ *   speak.c   what the screen reader says: what changed on the screen, in full words */
 #ifndef APP_NAME
 #define APP_NAME "PERCOLATOR"
 #endif
@@ -19,7 +21,9 @@
 #include "data.c"
 #include "fx.c"
 #include "sound.c"
+#include "sr.c"
 #include "ui.c"
+#include "speak.c"
 
 static void app_init(void)
 {
@@ -29,6 +33,18 @@ static void app_init(void)
     ui_draw();
 }
 
-static void app_frame(void) { ui_frame(); }
+static void app_frame(void)
+{
+    ui_frame();
+    speak_frame();                               /* (speak.c: what changed, to a listening screen reader) */
+}
+
+static void app_sysex(void)                      /* the reader's frames; the rest stays for the update entry */
+{
+    const uint8_t *p;
+    uint32_t n;
+    if (ota_frame_get(&p, &n) && sr_frame(p, n, fm1_ms))
+        ota_frame_done();
+}
 
 static const char *app_fault_name(void) { return APP_NAME " CRASH"; }

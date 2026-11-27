@@ -1,11 +1,11 @@
 # Target cost budget (tests/target_budget.py): instructions in the loops of each
 # function in build/firmware.dis, x4 per nesting level, divides x9. The check allows +10 %.
 # Rewritten by BUDGET_UPDATE=1.
-fm1_alnk0_irq 35190
-fm1_timer5_irq 4916
+fm1_alnk0_irq 37333
+fm1_timer5_irq 4920
 aud_fade_half 17
 seq_tick 125
-snd_midi 53
+snd_midi 78
 snd_record 0
 voice_hit 0
 step_hit 25
@@ -13,5 +13,5 @@ rat_block 246
 sch_block 81
 rep_block 41
 clk_msg 0
-fx_block 458
+fx_block 457
 fx_filter_drive 134

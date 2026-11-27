@@ -118,6 +118,10 @@ static struct {
     volatile uint8_t ext_pub;
     volatile uint16_t ext_bpm2_pub;   /* the external tempo, BPM x 2 (the header) */
     volatile int32_t master_q8;  /* the MASTER pot, 0..256 */
+    /* MIDI OUT: the selected track's four sounds as CCs when they change, the pattern as Program Change */
+    const kit_t *cc_kit;         /* the kit and track the values below are of (another: no CCs, just noted) */
+    uint8_t cc_t, cc_v[4];
+    uint8_t pc_sent;             /* the pattern last sent (or noted) */
     /* ISR -> main loop */
     volatile uint8_t running_pub;
     volatile uint8_t pos_pub[NT];   /* each track's last played step */
@@ -163,6 +167,34 @@ static void snd_init(void)
     snd.spp_tick = 0xFFFFFFFFu;                  /* no song position yet */
     snd.clk_seen = CLK_AUTO_SAMPLES;             /* no clock yet (AUTO: internal) */
     snd.clk_iv_q8 = snd.ext_rate_q8 = 0;
+    snd.cc_kit = 0;                              /* (the first block notes the values; nothing sent at power-on) */
+    snd.pc_sent = (uint8_t)pat_index();
+}
+
+/* MIDI OUT: what the knobs and the pattern did, out as CC 2 / 11 / 4 / 1 (energy, decay, objects, frequency: what
+ * MIDI in takes) and Program Change 0..31; a change of track or kit only notes its values (no burst); off: noted */
+static const uint8_t SP_CC[4] = {2, 11, 4, 1};
+static void ctl_out(void)
+{
+    uint32_t t = snd.sel < NT ? snd.sel : 0u, i, ch = set.midi_ch ? set.midi_ch - 1u : 0u, p = pat_index();
+    const kit_t *k = kit_cur;
+    if (t != snd.cc_t || k != snd.cc_kit) {
+        snd.cc_t = (uint8_t)t;
+        snd.cc_kit = k;
+        for (i = 0; i < 4u; i++)
+            snd.cc_v[i] = k->t[t].p[i];
+    } else
+        for (i = 0; i < 4u; i++)
+            if (k->t[t].p[i] != snd.cc_v[i]) {
+                snd.cc_v[i] = k->t[t].p[i];
+                if (set.notes_out)
+                    midi_out(0xB0u | ch, SP_CC[i], snd.cc_v[i]);
+            }
+    if (p != snd.pc_sent) {
+        snd.pc_sent = (uint8_t)p;
+        if (set.notes_out)
+            midi_out(0xC0u | ch, p, 0);
+    }
 }
 
 /* -2 r cos(2 pi f / FS), Q29, for f in Hz Q16 and r in Q30: SK_COS (cos over 0..pi in 2048 steps) interpolated */
@@ -657,6 +689,9 @@ static __attribute__((noinline)) void snd_midi(uint32_t pkt, uint32_t src)
             kit.t[t].p[SP_FRQ] = (uint8_t)d2;
         else if (d1 == 120u || d1 == 123u)
             snd.silence_req = 1;
+        if (t == snd.cc_t && kit_cur == snd.cc_kit)   /* (what came in is not sent back out) */
+            snd.cc_v[SP_EN] = kit.t[t].p[SP_EN], snd.cc_v[SP_DEC] = kit.t[t].p[SP_DEC],
+            snd.cc_v[SP_OBJ] = kit.t[t].p[SP_OBJ], snd.cc_v[SP_FRQ] = kit.t[t].p[SP_FRQ];
     }
 }
 
@@ -789,6 +824,7 @@ static void app_audio(int32_t *out, uint32_t n)
     snd.ext = set.clock == CLK_EXT || (set.clock == CLK_AUTO && snd.clk_seen < CLK_AUTO_SAMPLES);
     while (midi_in_take(&pkt, &src))
         snd_midi(pkt, src);
+    ctl_out();
     if (snd.silence_req) {
         snd.silence_req = 0;
         for (t = 0; t < NT; t++)
