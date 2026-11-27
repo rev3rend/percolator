@@ -110,6 +110,21 @@ static void screens(void)
             all &= glyph_at(&AF_L, (uint8_t)*c) >= 0;
         check("boot: every character of APP_NAME is in the large font", all);
     }
+    {   /* the name's letters in turn: yellow (the theme), cyan (the accent), magenta (the locks) */
+        uint32_t x, y, th = 0, ac = 0, mg = 0, lx[3] = {0, 0, 0};
+        for (y = 82; y < 82u + AF_L.h; y++)
+            for (x = 0; x < 240u; x++) {
+                uint16_t c = host_fb[y * 240u + x];
+                if (c == T_THEME && (!th++ || x < lx[0]))
+                    lx[0] = x;
+                if (c == T_ACCENT && (!ac++ || x < lx[1]))
+                    lx[1] = x;
+                if (c == C_LOCK && (!mg++ || x < lx[2]))
+                    lx[2] = x;
+            }
+        check("splash: the name in yellow, cyan and magenta", th > 40u && ac > 40u && mg > 40u);
+        check("splash: P yellow, E cyan, R magenta (left to right)", lx[0] < lx[1] && lx[1] < lx[2]);
+    }
     shot("splash");
     frames(80);
     check("after the splash: HOME GRID, 23 rows of names and steps", ink_rows(G_TOP, G_FOOT) > 120u);

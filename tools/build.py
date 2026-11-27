@@ -53,6 +53,7 @@ SDK_SHA256 = {
 PRODUCT = "FM-1_900"                # package identity: the installers check it; keep it (see the fm1-platform skill)
 VERSION = None                      # APP_VERSION for release builds (default: firmware/app/app.c)
 NAME = "firmware"                   # the output files' stem (build/firmware.bin, .fwsc)
+RELEASE_NAME = "percolator"         # a release's files: build/percolator-X.Y.fwsc, release-X.Y/percolator-X.Y*
 
 
 def toolchain():
@@ -335,7 +336,7 @@ def main():
         if not re.fullmatch(r"\d\.\d(?:\.\d){0,2}(-[A-Za-z0-9]+)?", a.release):
             raise SystemExit(f"--release {a.release}: use X.Y, X.Y.Z, X.Y.Z.W or X.Y-suffix, one digit each")
         VERSION = "v" + a.release.lower()      # e.g. v1.0, v1.1-rc1
-        name = f"{NAME}-{a.release}.fwsc"
+        name = f"{RELEASE_NAME}-{a.release}.fwsc"
     fm1pkg_make.SDK = a.sdk
     for rel, sha in SDK_SHA256.items():          # fail early without the SDK
         if hashlib.sha256(fm1pkg_make.sdk_file(rel)).hexdigest() != sha:
@@ -366,7 +367,7 @@ def main():
         rel = OUT / f"release-{a.release}"
         shutil.rmtree(rel, ignore_errors=True)
         (rel / "LICENSES").mkdir(parents=True)
-        app = f"{NAME}-{a.release}-app.bin"
+        app = f"{RELEASE_NAME}-{a.release}-app.bin"
         (rel / name).write_bytes(pkg)
         (rel / app).write_bytes(img)
         (rel / "SHA256SUMS").write_text("".join(f"{hashlib.sha256(b).hexdigest()}  {n}\n"

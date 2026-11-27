@@ -121,8 +121,9 @@ theme amber, the playhead and the sounding marks cyan, muted tracks dim. Steps w
 complement of the amber and the cyan; accented #FF80E8), in both the GRID and the TRACK view; locks on a step that is
 off show as a magenta stub (GRID) or a magenta edge (TRACK). The white dot marks probability, ratchet or a condition. Lazy drawing: each screen area has a
 signature of what it shows and redraws only what changed; the GRID's playhead and sounding marks are sent cell by
-cell (a 16th changes ~4 KB of pixels, not the ~90 KB grid). A 1.2 s splash at power-on shows the name, the version and
-the STK / Perry Cook credit.
+cell (a 16th changes ~4 KB of pixels, not the ~90 KB grid). A 1.2 s splash at power-on shows the name (its letters
+yellow, cyan, magenta in turn: the theme, the playhead's and the locks' colours), the version and the STK / Perry
+Cook credit.
 
 ### HOME: GRID
 
@@ -312,7 +313,12 @@ ignored and replaced by defaults; every value is range-checked on load.
 - **MIDItoSpeech sidecar** (`docs/synthaccess/Percolator.json`, for https://github.com/IDMNYU/synthaccess
   MIDItoSpeech): what the FM-1 sends (the notes as track names, the CCs as parameter names and values), generated
   from the firmware's tables (`tools/gen_synthaccess.c`) and checked by the suite against what is sent.
-- **USB name:** unchanged from the kit's rules (the package identity and USB name are not touched by the app).
+- **USB name:** "Percolator FM-1" (the USB product string, firmware/src/usb.c, changed on request 2026-11-26 as in
+  Solinaesque and Looching 2026); it keeps "FM-1", by which fm1_install.py and the web installer find the unit. The
+  update loader stays "Felucca Update"; the package identity stays FM-1_900. Release builds are named
+  `percolator-X.Y.fwsc`. A host that knew the unit as "Felucca" (or an earlier firmware's name) may show the new
+  name only after the cable is plugged in again; a DAW must select the new port (and enable sync on it for the
+  clock: many hide clock by default).
 
 ## The repository and the web
 

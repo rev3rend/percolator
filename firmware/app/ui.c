@@ -768,10 +768,25 @@ static uint32_t screen_id(void)
     return 0xE0u + set.view;
 }
 
-static void draw_splash(void)
+static void draw_splash(void)                    /* the name, its letters yellow, cyan, magenta in turn */
 {
+    static const char *const name = APP_NAME;
+    char pre[24], one[2] = {0, 0};
+    uint32_t i, n = str_len(name), k = 0;
+    int32_t x0;
     lcd_fill(0, 0, 240, 240, T_BG);
-    draw_text_line(0, 82, 240, &AF_L, APP_NAME, T_THEME, T_BG, 1);
+    x0 = (240 - text_w(&AF_L, name)) / 2;
+    cv_begin(240, AF_L.h, T_BG);
+    for (i = 0; i < n && i + 1u < sizeof pre; i++) {
+        uint16_t c = k % 3u == 0u ? T_THEME : k % 3u == 1u ? T_ACCENT : C_LOCK;
+        one[0] = name[i];
+        str_cpy(pre, name, i + 2u);              /* its place: the kerned word up to it, less its own width */
+        if (name[i] != ' ') {
+            cv_text(x0 + text_w(&AF_L, pre) - text_w(&AF_L, one), 0, &AF_L, one, c);
+            k++;                                 /* (a space takes no colour) */
+        }
+    }
+    cv_blit(0, 82);
     draw_text_line(0, 122, 240, &AF_S, APP_VERSION, T_MID, T_BG, 1);
     draw_text_line(0, 150, 240, &AF_S, "STK SHAKERS (PHISEM) - PERRY COOK", T_DIM, T_BG, 1);
 }
