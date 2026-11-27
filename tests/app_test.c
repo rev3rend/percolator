@@ -45,6 +45,15 @@ static void key_tap(uint32_t k)                  /* a key tapped (with whatever 
     host_frame();
 }
 
+static void song_screen(int open)                /* HOME cycles GRID -> TRACK -> SONG -> GRID */
+{
+    uint32_t i;
+    if (ui.page != PG_HOME)
+        press(B_HOME);
+    for (i = 0; i < 4u && ui.song_open != (uint8_t)(open != 0); i++)
+        press(B_HOME);
+}
+
 static uint32_t ink_rows(uint32_t y0, uint32_t y1)   /* rows in y0..y1 with anything but the background */
 {
     uint32_t x, y, n = 0;
@@ -191,6 +200,7 @@ static void screens(void)
     frames(2);
     check("TRACK view: the locked trig is magenta", px(10 + 4 * 28 + 12, G_TOP + 30 + 30) == C_LOCK_ACC);
     shot("home_track_locks");
+    press(B_HOME);                               /* (TRACK -> SONG -> GRID) */
     press(B_HOME);
     fm1_in.notes = 1u << step_key(4);            /* hold step 5, EDIT: its locks off, its trig kept */
     host_frame();
@@ -209,7 +219,35 @@ static void screens(void)
     host_press(B_EDIT, 0);
     host_frame();
     check("EDIT + C4: track 8 (Coke Can) selected", sel() == 7u);
-    check("STEP mode: black keys still play, white keys do not", snd.pad_mask == (PAD_MASK & BLACK_KEYS));
+    check("STEP mode: no key plays a track (white: steps, black: functions)", snd.pad_mask == 0u);
+    track_select(6);                             /* STEP mode's C#5 / D#5: mute / solo the selected track */
+    key_tap(KEY_STEP_MUTE);
+    check("STEP mode, C#5: the selected track muted, C#5 lit", (pat.t[6].flags & TP_MUTE) &&
+                                                              host_led[14u + KEY_STEP_MUTE] && !host_led[14u + KEY_STEP_SOLO]);
+    key_tap(KEY_STEP_SOLO);
+    check("STEP mode, D#5: the selected track soloed, D#5 lit", (pat.t[6].flags & TP_SOLO) && host_led[14u + KEY_STEP_SOLO]);
+    fm1_in.notes = 1u << KEY_STEP_MUTE;          /* C#5 held, then D#5: all off */
+    host_frame();
+    key_tap(KEY_STEP_SOLO);
+    fm1_in.notes = 0;
+    host_frame();
+    check("STEP mode, C#5 held then D#5: every mute and solo off", !(pat.t[6].flags & (TP_MUTE | TP_SOLO)));
+    {   /* E5, F5, G5 are steps 14..16 only (no mute, solo or SONG behind them, EDIT or not) */
+        uint32_t f0 = pat.t[6].flags;
+        key_tap(23);
+        key_tap(26);
+        check("STEP mode: E5 and G5 are steps 14 and 16 only", (pat.t[6].s[13].f & ST_TRIG) &&
+                                                                (pat.t[6].s[15].f & ST_TRIG) &&
+                                                                pat.t[6].flags == f0 && !ui.song_open);
+        host_press(B_EDIT, 1);
+        host_frame();
+        key_tap(24);
+        host_press(B_EDIT, 0);
+        host_frame();
+        check("STEP mode: EDIT + F5 does nothing (no longer solo)", pat.t[6].flags == f0);
+        pat.t[6].s[13].f = pat.t[6].s[15].f = 0;
+    }
+    track_select(7);
     press(B_SEQ);
     check("SEQ again: PAD mode, all 23 pads play", ui.mode == 0u && snd.pad_mask == PAD_MASK);
 
@@ -292,7 +330,9 @@ static void screens(void)
     host_frame();
     press(B_SEQ);
     press(B_HOME);
-    check("HOME again: the GRID", set.view == 0u);
+    check("HOME again, from TRACK: the SONG screen", ui.song_open == 1u);
+    press(B_HOME);
+    check("HOME again, from SONG: the GRID", set.view == 0u && !ui.song_open);
 
     /* every page, its values at the widest */
     {
@@ -349,8 +389,8 @@ static void screens(void)
     press(B_HOME);
     check("SAVE: HOME cancels", !ui.saving);
 
-    key_tap(KEY_SONG);
-    check("SONG (G5): the SONG screen", ui.song_open == 1u);
+    song_screen(1);
+    check("SONG (HOME, HOME): the SONG screen", ui.song_open == 1u);
     {   /* one turn a frame: within a frame the roles are taken in their order, not the order turned */
         static const int32_t T[][2] = {{EN_PRESET, 1}, {EN_SELECT, 1}, {EN_PRESET, 1}, {EN_SELECT, -1}, {EN_K1, 15},
                                        {EN_PRESET, 14}};
@@ -372,7 +412,7 @@ static void screens(void)
     host_turn(EN_K2, -1);
     host_frame();
     check("SONG: KNOB 2 left deletes", songs.s[0].n == 7u);
-    key_tap(KEY_SONG);
+    song_screen(0);
     check("SONG again: closed", ui.song_open == 0u);
 
     /* the widest GRID: every step set with everything, mixed mutes and solos, a long message */
@@ -1225,7 +1265,7 @@ static void sound(void)
         sg->e[0][0] = 1; sg->e[0][1] = 2;        /* P02 x2, then P03 x1, ONCE */
         sg->e[1][0] = 2; sg->e[1][1] = 1;
         song_index = 1;
-        key_tap(KEY_SONG);
+        song_screen(1);
         check("SONG screen open", ui.song_open == 1u);
         ui.song_cur = 0;
         press(B_PLAY);
@@ -1239,7 +1279,7 @@ static void sound(void)
         host_render(buf, 2048);
         host_frame();
         check("song: after its 2 repeats, the next entry (P03)", pat_index() == 2u && snd.song_e_pub == 1u);
-        key_tap(KEY_SONG);                       /* closed: it plays on, the header shows it */
+        song_screen(0);                          /* closed: it plays on, the header shows it */
         frames(2);
         shot("home_song");
         lint("HOME with a song playing");
@@ -1247,7 +1287,7 @@ static void sound(void)
         host_frame();
         check("song ONCE: stops after its last entry", !snd.running_pub && !snd.song_on_pub);
         sg->loop = 1;
-        key_tap(KEY_SONG);
+        song_screen(1);
         ui.song_cur = 1;                         /* from entry 2 */
         press(B_PLAY);
         host_render(buf, 64);
@@ -1263,7 +1303,7 @@ static void sound(void)
         check("song: PLAY again stops it", !snd.running_pub && !snd.song_on_pub);
         press(B_PLAY);
         host_render(buf, 64);
-        key_tap(KEY_SONG);                       /* closed; a pattern by hand: the song gives way */
+        song_screen(0);                          /* closed; a pattern by hand: the song gives way */
         press(B_OCTUP);
         host_render(buf, 64);
         host_frame();
@@ -1274,7 +1314,7 @@ static void sound(void)
         ui.queued = 0;
         snd.next_req = 0;
         song_index = 2;                          /* an empty song */
-        key_tap(KEY_SONG);
+        song_screen(1);
         press(B_PLAY);
         host_render(buf, 64);
         check("song empty: PLAY says so, nothing plays", !snd.running_pub && strstr(ui.msg, "EMPTY") != 0);
@@ -1294,7 +1334,7 @@ static void sound(void)
         clock_run(120, 64, 0, at, 8);
         set.clock = CLK_AUTO;
         clock_run(0, 26496, 0, at, 8);
-        key_tap(KEY_SONG);
+        song_screen(0);
         check("SONG screen closed", !ui.song_open);
         memset(sg, 0, sizeof *sg);
         song_index = 0;

@@ -26,7 +26,8 @@
 #define KEY_MUTE 23u             /* the performance keys above the pads (fm1_in.notes bits) */
 #define KEY_SOLO 24u
 #define KEY_ACCENT 25u
-#define KEY_SONG 26u
+#define KEY_STEP_MUTE 20u        /* STEP mode, where the black keys play nothing: C#5 mutes, D#5 solos the selected track */
+#define KEY_STEP_SOLO 22u
 #define PAD_MASK ((1u << NT) - 1u)
 #define BLACK_KEYS 0x0252A52Au   /* bit k: key k is black (k % 12 in 1 3 5 8 10: F#3 G#3 A#3 C#4 D#4 ... F#5) */
 _Static_assert(NT == SK_N, "a track per STK Shakers instrument");

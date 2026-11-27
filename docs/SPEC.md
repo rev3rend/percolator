@@ -46,30 +46,37 @@ Track n plays STK Shakers type n − 1 and is played by key n (F3 = track 1). Th
 | 22 | D5 | 21 | Water Drops | WTR | 3 (sweeping) |
 | 23 | D#5 | 22 | Tuned Bamboo Chimes | ANG | 7 |
 
-The four keys above the pads are performance keys: E5 MUTE, F5 SOLO, F#5 ACCENT, G5 SONG.
+The keys above the pads: E5 MUTE and F5 SOLO (PAD mode, held + a pad), F#5 ACCENT; G5 nothing (in STEP mode it is
+step 16). In STEP mode the black keys play nothing and are function keys: C#5 MUTE, D#5 SOLO, F#5 ACCENT.
 
 ## Controls
 
-Two modes, toggled by SEQ: **PLAY mode** (keys are pads) and **STEP mode** (white keys are the 16 steps). SONG
-mode (G5) is a third screen on top of either.
+Two modes, toggled by SEQ: **PAD mode** (the 23 keys F3..D#5 are pads) and **STEP mode** (the 16 white keys are the
+steps and nothing else; the black keys are function keys). The SONG screen is HOME's third view (HOME on HOME cycles
+GRID → TRACK → SONG).
 
 ### Keys
 
 | Control | PLAY mode | STEP mode |
 | --- | --- | --- |
-| Keys 1..23 (F3..D#5) | play track n (fixed energy, or ACCENT energy while F#5 held); also select that track for the knobs; while REC and running, record the hit on the nearest step (quantized) | white keys (the 16 white keys F3..G5, left to right) = steps 1..16 of the selected track: tap toggles the trig; hold + encoders edits the step (below). Black keys: no step function (they still play their track while EDIT is not held) |
+| Keys 1..23 (F3..D#5) | play track n (fixed energy, or ACCENT energy while F#5 held); also select that track for the knobs; while REC and running, record the hit on the nearest step (quantized) | white keys (the 16 white keys F3..G5, left to right) = steps 1..16 of the selected track: tap toggles the trig; hold + encoders edits the step (below). Black keys play nothing (function keys, below) |
 | EDIT held + any key 1..23 | select that track (no sound) | select that track (no sound) |
-| E5 (MUTE) held + pad | toggle that track's mute | E5 is step 14; EDIT + E5 toggles the selected track's mute |
-| F5 (SOLO) held + pad | toggle that track's solo (several tracks can be soloed) | F5 is step 15; EDIT + F5 toggles the selected track's solo |
-| F#5 (ACCENT) held | pads and recorded hits are accented | F#5 is black, so it stays ACCENT: held + tap a step key = trig with accent (or toggles the accent of a set trig) |
-| G5 (SONG) | open / close the SONG screen | G5 is step 16; EDIT + G5 opens the SONG screen |
+| E5 (MUTE) held + pad | toggle that track's mute | E5 is step 14, nothing else |
+| F5 (SOLO) held + pad | toggle that track's solo (several tracks can be soloed) | F5 is step 15, nothing else |
+| C#5 | pad: track 21 (Wrench) | MUTE: toggle the selected track's mute (C#5 lit while muted) |
+| D#5 | pad: track 23 (Tuned Bamboo Chimes) | SOLO: toggle the selected track's solo (D#5 lit while soloed) |
+| F#5 (ACCENT) held | pads and recorded hits are accented | ACCENT: held + tap a step key = trig with accent (or toggles the accent of a set trig) |
+| G5 | nothing | step 16, nothing else |
+| the other black keys | pads | nothing (free for later functions) |
 
-The 16 white keys F3..G5 include E5, F5 and G5, so in STEP mode those three are steps 14..16 and their performance
-functions move behind EDIT. Mute and solo are also on the TRACK 2 page (ENV twice).
+White keys in STEP mode are only ever steps (G5 opened the SONG screen until 2026-11-26: confusing as the last step;
+the SONG screen moved to HOME, mute / solo in STEP mode to C#5 / D#5). Mute and solo are also on the TRACK 2 page
+(ENV twice).
 
 MUTE and SOLO count as held only when they went down before the pad (a chord or a forearm across the keys that
 includes E5 / F5 toggles nothing: found on the unit, where a forearm soloed tracks and silenced the sequence).
-PLAY mode: E5 held, then F5 (or F5, then E5) turns every mute and solo off. The state is always visible: the header
+PAD mode: E5 held, then F5 (or F5, then E5) turns every mute and solo off; STEP mode: C#5 held, then D#5 (or the
+other way). The state is always visible: the header
 shows SOLO (any track soloed) or MUTE (any muted); the footer and the TRACK view say MUTED, SOLO or
 "SILENT: SOLO ON" for the selected track, and its trigs are drawn dim in both views.
 
@@ -94,7 +101,7 @@ shows SOLO (any track soloed) or MUTE (any muted); the footer and the TRACK view
 | REC | live record on / off (pads into the current pattern while running, quantized; with nudge from the timing once nudge exists) |
 | SEQ | PLAY mode ↔ STEP mode |
 | EDIT | held: the next key selects a track; held + SAVE twice within 2.5 s = clear the selected track's steps |
-| HOME | the main screen; pressed again on it, toggles GRID (all tracks) ↔ TRACK (selected track zoomed) |
+| HOME | the main screen; pressed again on it, cycles GRID (all tracks) → TRACK (selected track zoomed) → SONG → GRID |
 | SAVE | the SAVE screen: save the pattern / kit / song to a slot (PRESETS picks the slot, SAVE confirms, HOME cancels) |
 | FX | the FX page(s) |
 | ENV | the TRACK page (the selected track's mix and length) |
@@ -182,7 +189,7 @@ measure; the screen-reader status comes with milestone 10.)
 The thing to save (PATTERN / KIT / SONG), the slot (1..16, 1..4, 1..4) and whether it is used; SAVE again confirms,
 HOME cancels. A message confirms "PATTERN 05 SAVED".
 
-### SONG (G5)
+### SONG (HOME's third view)
 
 A list of the selected song's chain (up to 64 entries of pattern + repeats 1..16), the selected entry highlighted.
 SELECT moves through the entries (the last position, END, adds an entry with PRESETS), PRESETS sets the entry's

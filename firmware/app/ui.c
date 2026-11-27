@@ -802,7 +802,7 @@ static void draw_song(void)
     cv_begin(240, 120, T_BG);
     cv_text_in(0, 20, 240, &AF_S, "SELECT: ENTRY   PRESETS: PATTERN", T_MID, T_BG);
     cv_text_in(0, 40, 240, &AF_S, "K1 REPEATS  K2 ADD/DEL  K3 LOOP", T_MID, T_BG);
-    cv_text_in(0, 60, 240, &AF_S, "K4 SONG  PLAY: START/STOP  G5: CLOSE", T_MID, T_BG);
+    cv_text_in(0, 60, 240, &AF_S, "K4 SONG  PLAY: START/STOP  HOME: GRID", T_MID, T_BG);
     cv_text_fit(10, 94, &AF_S, m, T_TEXT, T_BG, 220);
     cv_blit(0, 120);
 }
@@ -1086,18 +1086,9 @@ static void ui_encoders(void)
 static void key_press(uint32_t k, uint32_t keys)
 {
     int edit = panel_held(B_EDIT), ws = white_step(k);
-    if (edit) {                                  /* EDIT + a key: select (STEP mode's E5 / F5 / G5 too) */
-        if (k < NT && !(ui.mode && (k == KEY_MUTE || k == KEY_SOLO)))
+    if (edit) {                                  /* EDIT + a pad key: select that track */
+        if (k < NT)
             track_select(k);
-        else if (k == KEY_MUTE || k == KEY_SOLO) {
-            uint8_t bit = k == KEY_MUTE ? TP_MUTE : TP_SOLO;
-            pat.t[sel()].flags ^= bit;
-            msg2(SK_SHORT[sel()], (pat.t[sel()].flags & bit) ? (bit == TP_MUTE ? " MUTED" : " SOLO") :
-                                                                (bit == TP_MUTE ? " UNMUTED" : " SOLO OFF"));
-        } else if (k == KEY_SONG) {
-            ui.song_open ^= 1u;
-            ui.saving = 0;
-        }
         ui.held_fired[B_EDIT] = 1;
         return;
     }
@@ -1120,11 +1111,22 @@ static void key_press(uint32_t k, uint32_t keys)
         ui.step_used = 1;
         return;
     }
-    if (k == KEY_SONG && !ui.mode) {
-        ui.song_open ^= 1u;
-        ui.saving = 0;
+    if (ui.mode && (k == KEY_STEP_MUTE || k == KEY_STEP_SOLO)) {   /* STEP mode: C#5 / D#5, the selected track */
+        uint32_t other = k == KEY_STEP_MUTE ? KEY_STEP_SOLO : KEY_STEP_MUTE, t;
+        uint8_t bit = k == KEY_STEP_MUTE ? TP_MUTE : TP_SOLO;
+        if ((ui.last_keys & keys) >> other & 1u) {   /* the other held first: all off */
+            for (t = 0; t < NT; t++)
+                pat.t[t].flags &= (uint8_t)~(TP_MUTE | TP_SOLO);
+            msg("ALL MUTES AND SOLOS OFF");
+            return;
+        }
+        pat.t[sel()].flags ^= bit;
+        msg2(SK_SHORT[sel()], (pat.t[sel()].flags & bit) ? (bit == TP_MUTE ? " MUTED" : " SOLO") :
+                                                            (bit == TP_MUTE ? " UNMUTED" : " SOLO OFF"));
         return;
     }
+    if (ui.mode)
+        return;                                  /* STEP mode: the other black keys are free (future functions) */
     /* MUTE and SOLO count as held only if they were down before this frame: a chord (a forearm across the keys)
      * that includes E5 or F5 must not toggle every pad in it. E5 held, then F5 (or the other way): all off. */
     if (!ui.mode && ((k == KEY_SOLO && ((ui.last_keys & keys) >> KEY_MUTE & 1u)) ||
@@ -1180,7 +1182,7 @@ static void ui_keys(void)
     if (panel_held(B_EDIT) || (!ui.mode && (keys & (1u << KEY_MUTE | 1u << KEY_SOLO))))
         snd.pad_mask = 0;
     else
-        snd.pad_mask = ui.mode ? PAD_MASK & BLACK_KEYS : PAD_MASK;
+        snd.pad_mask = ui.mode ? 0u : PAD_MASK;  /* STEP mode: white keys are steps, black keys functions */
 }
 
 static void button_press(uint32_t b)
@@ -1236,9 +1238,17 @@ static void button_press(uint32_t b)
         ui.held_step = -1;
         msg(ui.mode ? "STEP MODE" : "PAD MODE");
         break;
-    case B_HOME:
-        if (ui.page == PG_HOME && !ui.song_open) {
-            set.view ^= 1u;
+    case B_HOME:                                 /* HOME on HOME: GRID -> TRACK -> SONG -> GRID */
+        if (ui.page == PG_HOME && !ui.saving) {
+            if (ui.song_open) {
+                ui.song_open = 0;
+                set.view = 0;
+            } else if (set.view == 0u)
+                set.view = 1;
+            else {
+                ui.song_open = 1;
+                break;
+            }
             ui.set_dirty = 1;
         }
         page_open(PG_HOME);
@@ -1315,7 +1325,7 @@ static void ui_leds(void)
         case B_PLAY: on |= snd.running_pub; break;
         case B_REC: on |= ui.rec; break;
         case B_SEQ: on |= ui.mode; break;
-        case B_HOME: on |= ui.page == PG_HOME && !ui.saving && !ui.song_open; break;
+        case B_HOME: on |= ui.page == PG_HOME && !ui.saving; break;   /* (SONG is a HOME view too) */
         case B_SAVE: on |= ui.saving && blink; break;
         case B_ENV: on |= ui.page == PG_TRACK || ui.page == PG_TRACK2; break;
         case B_SCL: on |= ui.page == PG_TIME; break;
@@ -1335,10 +1345,10 @@ static void ui_leds(void)
                 if (shown_pos(t) == (uint32_t)ws)
                     on = !on;
             }
+        } else if (ui.mode) {                    /* STEP mode's black keys: C#5 lit muted, D#5 lit soloed */
+            on = (k == KEY_STEP_MUTE && (pat.t[t].flags & TP_MUTE)) || (k == KEY_STEP_SOLO && (pat.t[t].flags & TP_SOLO));
         } else if (k < NT)
             on = (act >> k) & 1u || k == t;
-        else if (k == KEY_SONG)
-            on = ui.song_open;
         if ((fm1_in.notes >> k) & 1u)
             on = 1;
         fm1_led_key(14u + k, on);
