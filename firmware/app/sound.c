@@ -33,6 +33,14 @@
 #define E_HIT_Q24 1677722        /* 0.1 in Q24: STK's energy per hit at amplitude 1 */
 #define E_MAX_Q24 (1 << 24)
 #define STEP_UNITS ((uint32_t)FS * 30u)          /* phase units per 16th (phase += BPM x 2 per sample) */
+#define TICKS 4u                 /* clock ticks per 16th: a track steps every DIV_TICKS of them */
+#define TICK_UNITS (STEP_UNITS / TICKS)
+#define LOOKAHEAD 2u             /* ticks (half a 16th): a step nudged early is decided this far ahead */
+#define SCHQ 4u                  /* steps waiting for their time (nudge, swing), per track */
+static const uint8_t DIV_TICKS[NDIV] = {4, 8, 16, 32, 2, 1};   /* 1/1 1/2 1/4 1/8 2/1 4/1 (DIV_NAME) */
+/* the conditions' A:B (COND_NAME): play on loop A of every B; 0: not an A:B */
+static const uint8_t COND_AB[NCOND][2] = {{0, 0}, {1, 2}, {2, 2}, {1, 3}, {2, 3}, {3, 3}, {1, 4}, {2, 4}, {3, 4},
+                                          {4, 4}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 5}, {1, 6}, {1, 7}, {1, 8}};
 #define NOTE_OFF_BLOCKS 64u      /* notes out: the note-off ~46 ms after the note-on */
 #define LIM_KNEE 16384           /* the master's soft limit: straight up to here (-6 dBFS, where a busy pattern peaks
                                   * at the defaults), then a quadratic knee y = K + e - e^2 / 2^16 that meets full scale
@@ -64,6 +72,11 @@ static struct {
     uint8_t out_ch;
     uint32_t rec_skip;           /* bit t: a trig just recorded ahead of the playhead (it was heard as the pad) */
     uint8_t rec_skip_pos[NT];    /* its step: skipped once, when the playhead gets there */
+    struct { int32_t wait; const step_t *s; uint8_t per; } sch[NT][SCHQ];   /* decided steps, waiting (s: 0 free) */
+    uint32_t sch_mask;           /* bit t: track t has steps waiting */
+    uint8_t prek[NT];            /* bit (k & 7): track step k was decided ahead (an early nudge) */
+    uint32_t rep_mask;           /* bit t: note repeat on pad t (ARP held) */
+    int32_t rep_wait[NT];        /* samples to its next repeat */
     uint32_t rat_mask;           /* bit t: a ratchet's repeats are still due */
     int32_t rat_wait[NT];        /* samples until the next repeat */
     uint32_t rat_gap[NT];        /* samples between repeats (the step / the count) */
@@ -72,8 +85,8 @@ static struct {
     uint32_t dice;               /* the steps' probability (an LCG) */
     /* the clock */
     uint8_t running;
-    uint32_t phase;              /* 0 .. STEP_UNITS */
-    uint32_t gstep;              /* 16ths since start (the next to play) */
+    uint32_t phase;              /* 0 .. TICK_UNITS */
+    uint32_t tick;               /* ticks since start or the last pattern change (the next to process) */
     /* main loop -> ISR */
     volatile uint8_t run_req;    /* 1 start, 2 stop, 3 restart */
     volatile uint8_t stop_req;   /* app_audio_stop: stop and silence */
@@ -82,6 +95,7 @@ static struct {
     volatile uint8_t rec;        /* live record: pads set trigs while running */
     volatile uint8_t sel;        /* the selected track: MIDI CCs 2 / 4 / 11 / 1 set its parameters */
     volatile uint8_t next_req;   /* the pattern to change to, + 1 (0: none): at the next bar line, or at once when stopped */
+    volatile uint8_t fill;       /* ARP held: FILL conditions true, and held pads repeat */
     volatile int32_t master_q8;  /* the MASTER pot, 0..256 */
     /* ISR -> main loop */
     volatile uint8_t running_pub;
@@ -256,7 +270,7 @@ static uint32_t rat_amp(uint32_t a, uint32_t k, uint32_t n, uint32_t ramp)
 
 /* a step's trig: the locks (an accent moves each locked value towards 127 by ACCENT %; it adds to the energy as
  * always), the first hit, and the ratchet's repeats spread over the step */
-static __attribute__((noinline)) void step_hit(uint32_t t, const step_t *s)
+static __attribute__((noinline)) void step_hit(uint32_t t, const step_t *s, uint32_t per)
 {
     voice_t *v = &snd.v[t];
     int acc = (s->f & ST_ACC) != 0;
@@ -274,7 +288,7 @@ static __attribute__((noinline)) void step_hit(uint32_t t, const step_t *s)
     voice_hit(t, rat_amp(a, 0, n, st_ramp(s)));
     if (n > 1u) {
         snd.rat_mask |= 1u << t;
-        snd.rat_gap[t] = STEP_UNITS / pat_bpm2() / n;           /* (the step is FS x 30 / (BPM x 2) samples) */
+        snd.rat_gap[t] = TICK_UNITS * per / pat_bpm2() / n;     /* (the step: per ticks of TICK_UNITS / (BPM x 2)) */
         snd.rat_wait[t] = (int32_t)snd.rat_gap[t];
         snd.rat_amp[t] = (uint16_t)a;
         snd.rat_k[t] = 1;
@@ -308,25 +322,123 @@ static uint32_t solo_mask(void)
     return any;
 }
 
-static __attribute__((noinline)) void seq_step(void)   /* the 16th gstep: every track's step */
+static uint32_t tp_per(uint32_t t) { return DIV_TICKS[pat.t[t].div < NDIV ? pat.t[t].div : 0u]; }
+
+static int cond_ok(uint32_t c, uint32_t iter)    /* a step's condition on its track's loop iter (0: the first) */
 {
-    uint32_t t, solo = solo_mask();
-    if (snd.next_req && snd.gstep && (snd.gstep % NSTEP) == 0u) {   /* a queued pattern: at the bar line */
+    if (c == 10u)
+        return snd.fill;                         /* FILL */
+    if (c == 11u)
+        return !snd.fill;                        /* NOT FILL */
+    if (c == 12u)
+        return iter == 0u;                       /* FIRST (since PLAY or the pattern change) */
+    if (c == 13u)
+        return iter != 0u;                       /* NOT FIRST */
+    return !COND_AB[c][1] || iter % COND_AB[c][1] == COND_AB[c][0] - 1u;
+}
+
+/* track t's step k decided (ahead ticks early): trig, mute / solo, condition, probability; then played at its time:
+ * the nudge (twelfths of a 16th, a fixed time on every divide) and the swing (every second step of a pair, tracks
+ * at 16ths or slower: (SWING - 50) / 50 of a step) */
+static void step_eval(uint32_t t, uint32_t k, uint32_t ahead, uint32_t solo)
+{
+    uint32_t len = tp_len(t), per = tp_per(t), i;
+    const step_t *s = &pat.t[t].s[k % len];
+    int32_t ts, d;
+    if (!(s->f & ST_TRIG) || !audible(t, solo) || !cond_ok(st_cond(s), k / len) || !step_chance(s))
+        return;
+    ts = (int32_t)(TICK_UNITS / pat_bpm2());     /* samples per tick */
+    d = (int32_t)ahead * ts + st_nudge(s) * ts * (int32_t)TICKS / 12;
+    if (per >= TICKS && (k & 1u) && pat_swing() > 50u)
+        d += ((int32_t)pat_swing() - 50) * (int32_t)per * ts / 50;
+    if (d <= 0) {
+        step_hit(t, s, per);
+        return;
+    }
+    for (i = 0; i < SCHQ; i++)
+        if (!snd.sch[t][i].s) {
+            snd.sch[t][i].s = s;
+            snd.sch[t][i].wait = d;
+            snd.sch[t][i].per = (uint8_t)per;
+            snd.sch_mask |= 1u << t;
+            return;
+        }
+    step_hit(t, s, per);                         /* (no room: now) */
+}
+
+static __attribute__((noinline)) void seq_tick(void)   /* a clock tick: every track whose step is due, or nudged early */
+{
+    uint32_t t, solo, tk;
+    if (snd.next_req && snd.tick && (snd.tick % (NSTEP * TICKS)) == 0u) {   /* a queued pattern: at the bar line */
         pat_cur = &pats[(snd.next_req - 1u) % NPAT];
         snd.next_req = 0;
         snd.swapped = 1;
-        solo = solo_mask();
+        snd.tick = 0;                            /* its tracks from step 1, its loops from FIRST */
+        for (t = 0; t < NT; t++)
+            snd.prek[t] = 0;
     }
+    tk = snd.tick;
+    solo = solo_mask();
     for (t = 0; t < NT; t++) {
-        uint32_t pos = snd.gstep % tp_len(t);
-        const step_t *s = &pat.t[t].s[pos];
-        int skip = (snd.rec_skip >> t) & 1u && snd.rec_skip_pos[t] == pos;
-        snd.pos_pub[t] = (uint8_t)pos;
-        snd.rec_skip &= ~(1u << t);              /* (once: the next pass plays it) */
-        if ((s->f & ST_TRIG) && audible(t, solo) && !skip && step_chance(s))
-            step_hit(t, s);
+        uint32_t per = tp_per(t), k;
+        if (tk % per == 0u) {                    /* the step due now */
+            uint32_t pos;
+            k = tk / per;
+            pos = k % tp_len(t);
+            snd.pos_pub[t] = (uint8_t)pos;
+            if ((snd.prek[t] >> (k & 7u)) & 1u)
+                snd.prek[t] &= (uint8_t)~(1u << (k & 7u));   /* decided ahead already */
+            else if (!((snd.rec_skip >> t) & 1u && snd.rec_skip_pos[t] == pos))
+                step_eval(t, k, 0, solo);
+            snd.rec_skip &= ~(1u << t);          /* (once: the next pass plays it) */
+        }
+        if ((tk + LOOKAHEAD) % per == 0u) {      /* the step half a 16th ahead: decided now if it is nudged early */
+            k = (tk + LOOKAHEAD) / per;
+            if (st_nudge(&pat.t[t].s[k % tp_len(t)]) < 0) {
+                step_eval(t, k, LOOKAHEAD, solo);
+                snd.prek[t] |= (uint8_t)(1u << (k & 7u));
+            }
+        }
     }
-    snd.gstep++;
+    snd.tick++;
+}
+
+static __attribute__((noinline)) void sch_block(uint32_t n)   /* the decided steps whose time has come */
+{
+    uint32_t m = snd.sch_mask;
+    while (m) {
+        uint32_t t = (uint32_t)__builtin_ctz(m), i, left = 0;
+        m &= m - 1u;
+        for (i = 0; i < SCHQ; i++)
+            if (snd.sch[t][i].s) {
+                snd.sch[t][i].wait -= (int32_t)n;
+                if (snd.sch[t][i].wait <= 0) {
+                    step_hit(t, snd.sch[t][i].s, snd.sch[t][i].per);
+                    snd.sch[t][i].s = 0;
+                } else
+                    left = 1;
+            }
+        if (!left)
+            snd.sch_mask &= ~(1u << t);
+    }
+}
+
+static void sch_clear(void)
+{
+    uint32_t t, i;
+    for (t = 0; t < NT; t++) {
+        for (i = 0; i < SCHQ; i++)
+            snd.sch[t][i].s = 0;
+        snd.prek[t] = 0;
+    }
+    snd.sch_mask = snd.rat_mask = 0;
+}
+
+static int32_t rep_gap(void)                     /* note repeat: samples between repeats at REPEAT RATE */
+{
+    static const uint8_t NUM[NREP] = {2, 1, 1, 2}, DEN[NREP] = {1, 1, 2, 3};   /* 1/8 1/16 1/32 1/16T, in 16ths */
+    uint32_t r = set.rep_rate < NREP ? set.rep_rate : 1u;
+    return (int32_t)(STEP_UNITS / pat_bpm2() * NUM[r] / DEN[r]);
 }
 
 static __attribute__((noinline)) void rat_block(uint32_t n)   /* the ratchets' repeats due in this block */
@@ -348,14 +460,36 @@ static __attribute__((noinline)) void rat_block(uint32_t n)   /* the ratchets' r
 
 static __attribute__((noinline)) void snd_record(uint32_t t, int accent)   /* a pad while REC runs */
 {
-    uint32_t len = tp_len(t), g = snd.gstep ? snd.gstep - 1u : 0u, pos;
-    if (snd.phase >= STEP_UNITS / 2u) {          /* nearer the next 16th than the one just played: that one, and */
-        g++;                                     /* not again when the playhead gets there a moment later */
+    uint32_t len = tp_len(t), per = tp_per(t), last = snd.tick ? snd.tick - 1u : 0u, k, pos;
+    uint64_t now = (uint64_t)last * TICK_UNITS + snd.phase, step = (uint64_t)per * TICK_UNITS;
+    k = (uint32_t)((now + step / 2u) / step);    /* the nearest of the track's steps */
+    if (k > last / per) {                        /* ahead of the playhead: heard as the pad, not again a moment later */
         snd.rec_skip |= 1u << t;
-        snd.rec_skip_pos[t] = (uint8_t)(g % len);
+        snd.rec_skip_pos[t] = (uint8_t)(k % len);
     }
-    pos = g % len;
+    pos = k % len;
     pat.t[t].s[pos].f |= ST_TRIG | (accent ? ST_ACC : 0u);
+}
+
+static __attribute__((noinline)) void rep_block(uint32_t n, uint32_t keys)   /* note repeat: the held pads */
+{
+    uint32_t m = snd.rep_mask;
+    while (m) {
+        uint32_t t = (uint32_t)__builtin_ctz(m);
+        m &= m - 1u;
+        if (!snd.fill || !((keys >> t) & 1u) || !((snd.pad_mask >> t) & 1u)) {
+            snd.rep_mask &= ~(1u << t);          /* let go of the pad or of ARP */
+            continue;
+        }
+        snd.rep_wait[t] -= (int32_t)n;
+        if (snd.rep_wait[t] <= 0) {
+            int acc = (keys >> KEY_ACCENT) & 1u;
+            snd_hit(t, amp_of(t, acc));
+            if (snd.rec && snd.running)
+                snd_record(t, acc);
+            snd.rep_wait[t] += rep_gap();
+        }
+    }
 }
 
 static __attribute__((noinline)) void snd_midi(uint32_t pkt, uint32_t src)
@@ -524,9 +658,9 @@ static void app_audio(int32_t *out, uint32_t n)
             snd.running = 0;
         } else if (r == 3u || !snd.running) {
             snd.running = 1;
-            snd.rat_mask = 0;
-            snd.gstep = 0;
-            snd.phase = STEP_UNITS;              /* the first 16th at once */
+            sch_clear();
+            snd.tick = 0;
+            snd.phase = TICK_UNITS;              /* the first tick at once */
         }
     }
     if (snd.next_req && !snd.running) {          /* stopped: the queued pattern now */
@@ -543,17 +677,25 @@ static void app_audio(int32_t *out, uint32_t n)
         snd_hit(k, amp_of(k, acc));
         if (snd.rec && snd.running)
             snd_record(k, acc);
+        if (snd.fill) {                          /* ARP held: the pad repeats while held */
+            snd.rep_mask |= 1u << k;
+            snd.rep_wait[k] = rep_gap();
+        }
     }
+    if (snd.rep_mask)
+        rep_block(n, keys);
     if (snd.running) {
         snd.phase += pat_bpm2() * n;
-        while (snd.phase >= STEP_UNITS) {
-            snd.phase -= STEP_UNITS;
-            seq_step();
+        while (snd.phase >= TICK_UNITS) {
+            snd.phase -= TICK_UNITS;
+            seq_tick();
         }
+        if (snd.sch_mask)
+            sch_block(n);
         if (snd.rat_mask)
             rat_block(n);
-    } else
-        snd.rat_mask = 0;                        /* stopped: no repeats left over */
+    } else if (snd.sch_mask | snd.rat_mask)
+        sch_clear();                             /* stopped: nothing left over */
     snd.running_pub = snd.running;
     for (t = 0; t < NT; t++)                     /* notes out: the note-offs due */
         if (snd.note_off[t] && !--snd.note_off[t])

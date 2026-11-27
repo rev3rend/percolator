@@ -621,6 +621,34 @@ static void ring_out(void)                       /* every voice back to silence 
         voice_silence(t);
 }
 
+
+static uint32_t hit_times(uint32_t t, uint32_t frames_, uint32_t *at, uint32_t max)   /* hits on t, block by block */
+{
+    uint32_t i, n = 0;
+    uint8_t h = snd.hits[t];
+    for (i = 0; i < frames_ / CTL; i++) {
+        host_render(buf, CTL);
+        while (snd.hits[t] != h) {
+            h++;
+            if (n < max)
+                at[n] = i * CTL;
+            n++;
+        }
+    }
+    return n;
+}
+
+static void seq_reset(void)                      /* stopped, an empty pattern, silence */
+{
+    uint32_t t;
+    snd.run_req = 2;
+    host_render(buf, 64);
+    memset(pats, 0, sizeof pats);
+    pat_check(&pat);
+    for (t = 0; t < NT; t++)
+        voice_silence(t);
+}
+
 static void sound(void)
 {
     uint32_t t, pkt, h0;
@@ -927,6 +955,105 @@ static void sound(void)
         memset(pats, 0, sizeof pats);
         pat_check(&pat);
         ring_out();
+    }
+    {   /* milestone 6: clock divide, conditions, nudge, swing, note repeat (120 BPM: a 16th is 5512.5 samples) */
+        uint32_t at[64], n, k;
+        static const struct { uint8_t div; uint32_t hits; const char *what; } DV[] = {
+            {1, 4, "clock divide 1/2: 4 steps a second (8ths)"}, {4, 16, "clock divide 2/1: 16 steps a second"},
+            {5, 32, "clock divide 4/1: 32 steps a second"}, {3, 1, "clock divide 1/8: 1 step a second"}};
+        for (k = 0; k < 4u; k++) {
+            uint32_t j;
+            seq_reset();
+            for (j = 0; j < NSTEP; j++)
+                pat.t[0].s[j].f = ST_TRIG;
+            pat.t[0].div = DV[k].div;
+            snd.run_req = 1;
+            n = hit_times(0, 44096, at, 64);
+            check(DV[k].what, n == DV[k].hits);
+        }
+        {   /* conditions on a 4-step track, 8 loops (4 s): step 1 only */
+            static const struct { uint8_t c, fill; uint32_t hits; const char *what; } CD[] = {
+                {1, 0, 4, "condition 1:2: loops 1, 3, 5, 7 of 8"}, {2, 0, 4, "condition 2:2: loops 2, 4, 6, 8"},
+                {8, 0, 2, "condition 3:4: 2 of 8 loops"}, {12, 0, 1, "condition FIRST: the first loop only"},
+                {13, 0, 7, "condition NOT FIRST: all but the first"}, {10, 1, 8, "condition FILL, ARP held: every loop"},
+                {10, 0, 0, "condition FILL, ARP not held: never"}, {11, 0, 8, "condition NOT FILL, ARP not held: every loop"}};
+            for (k = 0; k < sizeof CD / sizeof CD[0]; k++) {
+                seq_reset();
+                pat.t[0].len = 4;
+                pat.t[0].s[0].f = (uint8_t)(ST_TRIG | CD[k].c << 2);
+                snd.fill = CD[k].fill;
+                snd.run_req = 1;
+                n = hit_times(0, 44096u * 4u - 64u, at, 64);
+                snd.fill = 0;
+                check(CD[k].what, n == CD[k].hits);
+                if (k == 1u)
+                    check("condition 2:2: not in the first loop", n && at[0] >= 4u * 5512u - 64u);
+            }
+        }
+        {   /* nudge: step 2 alone, +3 and -3 twelfths of a 16th */
+            seq_reset();
+            pat.t[0].s[1].f = ST_TRIG;
+            pat.t[0].s[1].rat = (uint8_t)(3u << 4);
+            snd.run_req = 1;
+            n = hit_times(0, 11040, at, 4);
+            check("nudge +3: a quarter of a 16th late (6890)", n == 1u && abs((int)at[0] - 6890) <= 48);
+            seq_reset();
+            pat.t[0].s[1].f = ST_TRIG;
+            pat.t[0].s[1].rat = (uint8_t)(((uint32_t)-3 & 15u) << 4);
+            snd.run_req = 1;
+            n = hit_times(0, 11040, at, 4);
+            check("nudge -3: a quarter of a 16th early (4134)", n == 1u && abs((int)at[0] - 4134) <= 48);
+            seq_reset();
+            pat.t[0].s[0].f = ST_TRIG;           /* step 1 nudged early: at PLAY it cannot be, so at once */
+            pat.t[0].s[0].rat = (uint8_t)(((uint32_t)-5 & 15u) << 4);
+            snd.run_req = 1;
+            n = hit_times(0, 5504, at, 4);
+            check("nudge -5 on step 1 at PLAY: plays at once", n == 1u && at[0] == 0u);
+            n = hit_times(0, 88192 - 5504, at, 4);
+            check("nudge -5 on step 1, the next loop: 5/12 of a 16th early", n == 1u &&
+                  abs((int)(at[0] + 5504) - (int)(16u * 5512u + 256u - 2297u)) <= 300);
+        }
+        {   /* swing 75 %: the second 16th of each pair half a 16th late, the first on time; not on 32nds */
+            seq_reset();
+            pat.t[0].s[1].f = ST_TRIG;
+            pat.t[0].s[2].f = ST_TRIG;
+            pat.swing = 75;
+            snd.run_req = 1;
+            n = hit_times(0, 13760, at, 4);
+            check("swing 75 %: step 2 half a 16th late (8268)", n == 2u && abs((int)at[0] - 8268) <= 48);
+            check("swing 75 %: step 3 on time (11025)", n == 2u && abs((int)at[1] - 11025) <= 48);
+            seq_reset();
+            pat.t[0].s[1].f = ST_TRIG;
+            pat.t[0].div = 4;                    /* 2/1: 32nds */
+            pat.swing = 75;
+            snd.run_req = 1;
+            n = hit_times(0, 5504, at, 4);
+            check("swing: not on 32nds (step 2 at half a 16th, 2756)", n == 1u && abs((int)at[0] - 2756) <= 48);
+            pat.swing = 50;
+        }
+        {   /* note repeat: ARP held + a pad held, at REPEAT RATE; let go: it stops */
+            seq_reset();
+            snd.fill = 1;
+            set.rep_rate = 1;                    /* 1/16 */
+            fm1_in.notes = 1u << 3;
+            n = hit_times(3, 43840, at, 64);     /* (just short of a second: 0, 5512, ... 38584) */
+            check("note repeat 1/16, ARP held: 8 hits a second (stopped too)", n == 8u &&
+                  abs((int)(at[1] - at[0]) - 5512) <= 48);
+            fm1_in.notes = 0;
+            n = hit_times(3, 22048, at, 64);
+            check("note repeat: the pad let go, no more", n == 0u);
+            set.rep_rate = 0;                    /* 1/8 */
+            fm1_in.notes = 1u << 3;
+            n = hit_times(3, 43840, at, 64);
+            check("note repeat 1/8: 4 hits a second", n == 4u);
+            snd.fill = 0;
+            host_render(buf, 64);
+            n = hit_times(3, 22048, at, 64);
+            check("note repeat: ARP let go, no more (the pad still held)", n == 0u);
+            fm1_in.notes = 0;
+            set.rep_rate = 1;
+        }
+        seq_reset();
     }
     while (host_midi_out(&pkt))
         ;

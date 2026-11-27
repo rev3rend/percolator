@@ -4,9 +4,11 @@
 fm1_alnk0_irq 19906
 fm1_timer5_irq 4820
 aud_fade_half 17
-seq_step 87
+seq_tick 87
 snd_midi 48
 snd_record 0
 voice_hit 0
 step_hit 25
 rat_block 246
+sch_block 0
+rep_block 0

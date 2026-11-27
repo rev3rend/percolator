@@ -1054,11 +1054,7 @@ static void key_press(uint32_t k, uint32_t keys)
             pat.t[k].flags ^= TP_SOLO;
             msg2(SK_SHORT[k], (pat.t[k].flags & TP_SOLO) ? " SOLO" : " SOLO OFF");
         } else {
-            track_select(k);                     /* (the ISR played it) */
-            if (panel_held(B_ARP)) {
-                ui.held_fired[B_ARP] = 1;
-                msg("NOTE REPEAT: SOON");
-            }
+            track_select(k);                     /* (the ISR played it, and repeats it while ARP is held) */
         }
     }
 }
@@ -1091,6 +1087,7 @@ static void ui_keys(void)
         ui.held_step = -1;                       /* (a release missed between frames) */
     /* which keys the ISR plays: PLAY mode the 23 pads, STEP mode the black ones; none while EDIT, MUTE or SOLO
      * is held (those keys select or toggle) */
+    snd.fill = (uint8_t)panel_held(B_ARP);       /* FILL conditions, note repeat */
     if (panel_held(B_EDIT) || (!ui.mode && (keys & (1u << KEY_MUTE | 1u << KEY_SOLO))))
         snd.pad_mask = 0;
     else
@@ -1192,8 +1189,6 @@ static void ui_buttons(void)
             button_press(b);
         } else if (down && !ui.held_fired[b] && fm1_ms - ui.down_ms[b] >= HOLD_MS) {
             ui.held_fired[b] = 1;
-            if (b == B_ARP)
-                msg("FILL: SOON");
         }
     }
     ui.last_buttons = now;

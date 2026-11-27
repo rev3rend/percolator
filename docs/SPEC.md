@@ -243,15 +243,24 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
 
 ## Timing and sequencing
 
-- A sample-counting clock in the audio ISR at 24 PPQN; tempo 40..240 BPM; swing on even 16ths.
-- **Pattern:** 23 tracks × 16 steps. Per track: length 1..16, clock divide, mute, solo (mute / solo are performance
-  state, also saved with the pattern). Per step: trig, accent, probability, ratchet (1..4 with a ramp), condition,
-  nudge (−5..+5 twelfths of a step), four locks (or none).
+- A sample-counting clock in the audio ISR: 4 ticks per 16th (MIDI's 24 PPQN in milestone 7); tempo 40..240 BPM.
+- **Pattern:** 23 tracks × 16 steps. Per track: length 1..16, clock divide (1/1 16ths, 1/2 8ths, 1/4, 1/8, 2/1
+  32nds, 4/1 64ths: a step every 4, 8, 16, 32, 2, 1 ticks), mute, solo (mute / solo are performance state, also
+  saved with the pattern). Per step: trig, accent, probability, ratchet (1..4 with a ramp, spread over the track's
+  step), condition, nudge (−5..+5 twelfths of a 16th: a fixed time on every divide), four locks (or none).
+- **Conditions** count each track's loops (its length at its divide) from PLAY or from the last pattern change
+  (where the tracks restart from step 1): A:B plays on loop A of every B; FIRST only the first loop, NOT FIRST the
+  others; FILL while ARP is held, NOT FILL while it is not. Decided with the probability when the step is due.
+- **Nudge** without latency: a step nudged early is decided half a 16th ahead and scheduled; every other step plays
+  the moment it is due (a step 1 nudged early plays at once at PLAY, early from the next loop on).
+- **Swing** 50..75 % (TIME page, per pattern): every second step of a pair is late by (SWING − 50) / 50 of a step
+  (66 %: a triplet feel, 75 %: dotted), on tracks at 16ths or slower (not on 32nds and 64ths).
+- **Note repeat:** ARP held + a pad held repeats the pad at REPEAT RATE (TIME page: 1/8, 1/16, 1/32, 1/16T) until
+  either is let go, running or stopped; recorded while REC runs (rolls).
 - **Live record** (REC while running): pad hits go to the nearest step of the pressed track; accent from F#5. A hit
   recorded ahead of the playhead (nearer the next 16th) is heard as the pad and skipped once when the playhead gets
   there (no double hit); the next pass plays it.
 - **Pattern change** queued to the end of the pattern (the longest track's 16 steps) while running.
-- **Fill:** ARP held makes FILL conditions true.
 - **Songs:** 4 songs of up to 64 entries (pattern 1..16, repeats 1..16); song playback follows the chain and stops or
   loops at the end (a song setting).
 - **MIDI clock:** INT (sends clock out if enabled), EXT (follows 24 PPQN in, start / stop / continue, song position
@@ -359,7 +368,9 @@ Each can be tested on the host and heard in the emulator.
    accent), probability (one roll per step, so a ratcheted step plays all its repeats or none; CHANCE BIAS on the
    RANDOM page), ratchets x2..x4 spread evenly over the step (FLAT, UP from 40 % to 100 % of the step's amplitude,
    DOWN the other way; stopping drops the repeats left). Tests prove each against a broken version.
-6. **Conditions and time:** conditional trigs, FILL, nudge, per-track length and clock divide, swing, note repeat.
+6. **Conditions and time (done 2026-11-26):** conditional trigs (A:B, FIRST, NOT FIRST, FILL, NOT FILL), FILL on
+   ARP held, nudge early and late (a lookahead for the early ones), per-track clock divide, swing, note repeat. The
+   clock now runs at 4 ticks per 16th; each piece tested to the sample block and proved against a broken version.
 7. **MIDI sync:** clock in (EXT / AUTO), clock out, notes out, start / stop / continue.
 8. **Songs and kits:** the SONG screen, chains, 4 songs, 4 kits, the SAVE screen for all three.
 9. **Effects:** chorus, master filter and drive, delay, reverb (in that order, each measured).
