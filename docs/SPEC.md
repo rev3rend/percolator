@@ -77,11 +77,12 @@ shows SOLO (any track soloed) or MUTE (any muted); the footer and the TRACK view
 
 | Control while a step key is held | Effect on that step |
 | --- | --- |
-| KNOB 1..4 | parameter locks: energy, decay, objects, resonance frequency (turned to the left past the track's value, back to "--" = no lock) |
+| KNOB 1..4 | parameter locks: energy, decay, objects, resonance frequency (turned all the way to the left, past 0, back to "--" = no lock; EDIT clears all four at once). Turning a step off and on keeps its locks |
 | SELECT | probability 0..100 % (steps of 5) |
 | ALGORITHM | ratchet 1..4 (and the ratchet ramp: flat, up, down) |
 | PRESETS | condition: always, 1:2, 2:2, 1:3, 2:3, 3:3, 1:4 .. 4:4, FILL, NOT FILL, FIRST, NOT FIRST |
 | OCT− / OCT+ (tap) | nudge −/+ 1/12 of a step (−5..+5) |
+| EDIT (press) | clear every lock of that step (its trig and other settings stay) |
 | F#5 (ACCENT) tapped | toggle that step's accent |
 | Two step keys held | the second copies the first step's settings (a later convenience, milestone 9) |
 
@@ -116,7 +117,9 @@ shows SOLO (any track soloed) or MUTE (any muted); the footer and the TRACK view
 
 All 240 × 240 in the kit's AMBER palette (dark brown-black background, cream text, amber theme, cyan accent; its
 contrast is checked by `tools/gen_ui_palettes.py`): trigs in the selection amber, accented trigs in the brighter
-theme amber, the playhead and the sounding marks cyan, muted tracks dim. Lazy drawing: each screen area has a
+theme amber, the playhead and the sounding marks cyan, muted tracks dim. Steps with a lock in magenta (#D648BA, the
+complement of the amber and the cyan; accented #FF80E8), in both the GRID and the TRACK view; locks on a step that is
+off show as a magenta stub (GRID) or a magenta edge (TRACK). The white dot marks probability, ratchet or a condition. Lazy drawing: each screen area has a
 signature of what it shows and redraws only what changed; the GRID's playhead and sounding marks are sent cell by
 cell (a 16th changes ~4 KB of pixels, not the ~90 KB grid). A 1.2 s splash at power-on shows the name, the version and
 the STK / Perry Cook credit.

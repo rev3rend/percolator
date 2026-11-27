@@ -59,10 +59,8 @@ static int32_t st_nudge(const step_t *s)
     return n < -5 ? -5 : n > 5 ? 5 : n;
 }
 static uint32_t st_prob(const step_t *s) { return s->prob > 20u ? 0u : 100u - 5u * s->prob; }   /* percent */
-static int st_extra(const step_t *s)           /* anything beyond trig and accent: the grid marks it */
-{
-    return s->prob || s->rat || st_cond(s) || s->lock[0] || s->lock[1] || s->lock[2] || s->lock[3];
-}
+static int st_locked(const step_t *s) { return s->lock[0] || s->lock[1] || s->lock[2] || s->lock[3]; }
+static int st_marks(const step_t *s) { return s->prob || s->rat || st_cond(s); }   /* the white dot (locks: colour) */
 
 typedef struct {
     step_t s[NSTEP];

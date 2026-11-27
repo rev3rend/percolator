@@ -164,6 +164,28 @@ static void screens(void)
     host_frame();
     check("released after edits: the trig was not toggled", !(pat.t[3].s[4].f & ST_TRIG));
     check("GRID: a step with settings but no trig shows no trig", cell_px(3, 4) != T_SEL);
+    check("GRID: locks on a step that is off: a magenta stub", px(cell_x(4) + 4, G_TOP + 3 * G_ROW + 3) == C_LOCK);
+    pat.t[3].s[4].f = ST_TRIG;
+    host_frame();
+    check("GRID: a locked trig is magenta", cell_px(3, 4) == C_LOCK);
+    pat.t[3].s[4].f = ST_TRIG | ST_ACC;
+    host_frame();
+    check("GRID: a locked, accented trig is the brighter magenta", cell_px(3, 4) == C_LOCK_ACC);
+    press(B_HOME);                               /* the TRACK view too */
+    track_select(3);
+    frames(2);
+    check("TRACK view: the locked trig is magenta", px(10 + 4 * 28 + 12, G_TOP + 30 + 30) == C_LOCK_ACC);
+    shot("home_track_locks");
+    press(B_HOME);
+    fm1_in.notes = 1u << step_key(4);            /* hold step 5, EDIT: its locks off, its trig kept */
+    host_frame();
+    press(B_EDIT);
+    fm1_in.notes = 0;
+    host_frame();
+    check("held step + EDIT: every lock cleared", !st_locked(&pat.t[3].s[4]) && strstr(ui.msg, "LOCKS CLEARED") != 0);
+    check("held step + EDIT: the trig stays, the selection too", (pat.t[3].s[4].f & ST_TRIG) && sel() == 3u);
+    check("GRID: no locks: amber again", cell_px(3, 4) == T_THEME);
+    pat.t[3].s[4].f = 0;
 
     host_press(B_EDIT, 1);                       /* EDIT + a key: select, no sound */
     host_frame();
@@ -346,6 +368,7 @@ static void screens(void)
             step_t *st = &pat.t[t].s[s];
             st->f = (uint8_t)(((s + t) % 3u ? ST_TRIG : 0u) | ((s + t) % 4u == 0u ? ST_ACC : 0u));
             st->prob = (uint8_t)((s * t) % 5u == 0u ? 6u : 0u);
+            st->lock[SP_FRQ] = (uint8_t)((s + 2u * t) % 7u == 0u ? 90u : 0u);   /* some locks: magenta */
         }
     }
     msg("A MESSAGE THAT IS FAR TOO LONG FOR THE FOOTER OF THE SCREEN");
@@ -353,6 +376,10 @@ static void screens(void)
     frames(2);
     shot("home_grid_widest");
     lint("HOME GRID at its widest");
+    for (t = 0; t < NT; t++)                     /* the same pattern, nothing muted: trigs, accents, locks */
+        pat.t[t].flags = 0;
+    frames(2);
+    shot("home_grid_locks");
     for (t = 0; t < NT; t++)
         pat.t[t].flags = 0;
     memset(pats, 0, sizeof pats);

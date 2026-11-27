@@ -34,6 +34,21 @@
 #define G_FOOT 214
 static int32_t cell_x(uint32_t s) { return G_X0 + (int32_t)s * G_PITCH + (int32_t)(s >> 2) * 2; }
 
+/* a step with a lock: magenta, the complement of the amber trigs and the cyan playhead (outside the palette: the
+ * firmware has one look, AMBER); brighter when accented, as amber trigs are */
+#define RGB565(r, g, b) ((uint16_t)(((r) >> 3) << 11 | ((g) >> 2) << 5 | ((b) >> 3)))
+#define C_LOCK RGB565(214, 72, 186)
+#define C_LOCK_ACC RGB565(255, 128, 232)
+
+static uint16_t step_fill(const step_t *st, int silent)   /* a trig's colour: silent dim, locked magenta, else amber */
+{
+    if (silent)
+        return T_DIM;
+    if (st_locked(st))
+        return (st->f & ST_ACC) ? C_LOCK_ACC : C_LOCK;
+    return (st->f & ST_ACC) ? T_THEME : T_SEL;
+}
+
 enum { SCR_HOME, SCR_PAGE, SCR_SAVE, SCR_SONG };
 enum { SV_PAT, SV_KIT, SV_SONG };
 static const char *const SV_NAME[3] = {"PATTERN", "KIT", "SONG"};
@@ -340,12 +355,11 @@ static void draw_cell(uint32_t t, uint32_t s, int32_t x, int32_t y)
     if (s >= tp_len(t))
         return;                                  /* beyond the track's length: nothing */
     if (st->f & ST_TRIG) {
-        uint16_t c = muted ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL;
-        cv_rect(x, y + 1, G_CW, G_ROW - 2, head ? T_ACCENT : c);
-        if (st_extra(st))
+        cv_rect(x, y + 1, G_CW, G_ROW - 2, head ? T_ACCENT : step_fill(st, (int)muted));
+        if (st_marks(st))
             cv_rect(x + G_CW - 2, y + 1, 2, 2, T_TEXT);
-    } else
-        cv_rect(x, y + 3, G_CW, 2, head ? T_ACCENT : (s & 3u) ? T_LINE : T_DIM);
+    } else                                       /* off: a stub (magenta: locks waiting for a trig) */
+        cv_rect(x, y + 3, G_CW, 2, head ? T_ACCENT : st_locked(st) ? C_LOCK : (s & 3u) ? T_LINE : T_DIM);
 }
 
 static void draw_mark(uint32_t t, int32_t y, uint32_t flash)
@@ -387,7 +401,7 @@ static uint32_t sig_pair(uint32_t pr)            /* what a pair strip shows, but
         h = fnv(fnv(h, tp_len(t)), pat.t[t].flags);
         for (s = 0; s < NSTEP; s++) {
             const step_t *st = &pat.t[t].s[s];
-            h = fnv(h, (st->f & 3u) | (uint32_t)st_extra(st) << 2);
+            h = fnv(h, (st->f & 3u) | (uint32_t)st_marks(st) << 2 | (uint32_t)st_locked(st) << 3);
         }
     }
     return h;
@@ -521,21 +535,24 @@ static void draw_track_top(void)                 /* 22 .. 122: the name and the 
         const step_t *st = &pat.t[t].s[s];
         int32_t x = 10 + (int32_t)s * 28, y = 30;
         int on = (st->f & ST_TRIG) != 0, in = s < tp_len(t), head = shown_pos(t) == s;
-        cv_rrect(x, y, 24, 52, 3, !in ? T_BG : on ? (silent ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE, T_BG);
+        uint16_t fill = !in ? T_BG : on ? step_fill(st, (int)silent) : T_RAISE;
+        cv_rrect(x, y, 24, 52, 3, fill, T_BG);
         if (head)
             cv_frame(x - 2, y - 2, 28, 56, T_ACCENT);
         if (in) {
+            if (!on && st_locked(st))            /* locks on a step that is off: a magenta edge */
+                cv_frame(x + 1, y + 1, 22, 50, C_LOCK);
             fmt_int(b, (int32_t)s + 1);
-            cv_text_in(x, y + 4, 24, &AF_S, b, on ? T_INK : T_MID, on ? (silent ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE);
+            cv_text_in(x, y + 4, 24, &AF_S, b, on ? T_INK : T_MID, fill);
             if (st_ratchet(st) > 1u) {
                 str_cpy(b, "X", sizeof b);
                 fmt_int(b + 1, (int32_t)st_ratchet(st));
-                cv_text_in(x, y + 20, 24, &AF_S, b, on ? T_INK : T_TEXT, on ? (silent ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE);
+                cv_text_in(x, y + 20, 24, &AF_S, b, on ? T_INK : T_TEXT, fill);
             }
             if (st->prob)
                 cv_rect(x + 3, y + 46, 18 * (int32_t)st_prob(st) / 100, 3, T_ACCENT);
-            if (st_cond(st) || st->lock[0] || st->lock[1] || st->lock[2] || st->lock[3])
-                cv_rect(x + 10, y + 38, 4, 4, T_TEXT);
+            if (st_cond(st))
+                cv_rect(x + 10, y + 38, 4, 4, on ? T_INK : T_TEXT);
         }
     }
     cv_blit(0, G_TOP);
@@ -550,11 +567,13 @@ static void draw_track_bottom(void)              /* 122 .. 214: steps 9..16, the
         const step_t *st = &pat.t[t].s[s];
         int32_t x = 10 + (int32_t)(s - 8u) * 28, y = 2;
         int on = (st->f & ST_TRIG) != 0, in = s < tp_len(t), head = shown_pos(t) == s;
-        uint16_t fill = !in ? T_BG : on ? (silent ? T_DIM : (st->f & ST_ACC) ? T_THEME : T_SEL) : T_RAISE;
+        uint16_t fill = !in ? T_BG : on ? step_fill(st, (int)silent) : T_RAISE;
         cv_rrect(x, y, 24, 52, 3, fill, T_BG);
         if (head)
             cv_frame(x - 2, y - 2 < 0 ? 0 : y - 2, 28, 55, T_ACCENT);
         if (in) {
+            if (!on && st_locked(st))
+                cv_frame(x + 1, y + 1, 22, 50, C_LOCK);
             fmt_int(b, (int32_t)s + 1);
             cv_text_in(x, y + 4, 24, &AF_S, b, on ? T_INK : T_MID, fill);
             if (st_ratchet(st) > 1u) {
@@ -564,8 +583,8 @@ static void draw_track_bottom(void)              /* 122 .. 214: steps 9..16, the
             }
             if (st->prob)
                 cv_rect(x + 3, y + 46, 18 * (int32_t)st_prob(st) / 100, 3, T_ACCENT);
-            if (st_cond(st) || st->lock[0] || st->lock[1] || st->lock[2] || st->lock[3])
-                cv_rect(x + 10, y + 38, 4, 4, T_TEXT);
+            if (st_cond(st))
+                cv_rect(x + 10, y + 38, 4, 4, on ? T_INK : T_TEXT);
         }
     }
     if (ui.held_step >= 0) {
@@ -1093,6 +1112,15 @@ static void button_press(uint32_t b)
     if (ui.held_step >= 0 && ui.mode && (b == B_OCTDN || b == B_OCTUP)) {   /* nudge the held step */
         nudge(b == B_OCTUP ? 1 : -1);
         ui.held_fired[b] = 1;
+        return;
+    }
+    if (ui.held_step >= 0 && ui.mode && b == B_EDIT) {   /* a held step + EDIT: all its locks off */
+        char t[8];
+        memset(pat.t[sel()].s[ui.held_step].lock, 0, 4);
+        ui.step_used = 1;
+        ui.held_fired[b] = 1;
+        fmt_int(t, ui.held_step + 1);
+        msg2("LOCKS CLEARED: STEP ", t);
         return;
     }
     switch (b) {
