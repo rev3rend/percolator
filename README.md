@@ -2,14 +2,39 @@
 
 A 23-track percussion sequencer built on the PhISEM Shakers models of the Synthesis ToolKit (STK), with per-step accents, locks, probability, ratchets, songs, MIDI sync, effects and screen-reader support.
 
-Custom firmware for the **M-VAVE FM-1** pocket synthesizer, version 0.1, in development: the skeleton (milestone 1)
-is built and tested on the host and in the browser emulator; every control is wired, all 23 instruments sound
-through a first PhISEM voice, and a basic step sequencer plays. What it is, how it plays and what comes next:
-[docs/SPEC.md](docs/SPEC.md).
+Custom firmware for the **M-VAVE FM-1** pocket synthesizer, version 1.0
+([release](https://github.com/rev3rend/percolator/releases/tag/v1.0)). Every milestone of the spec is built, tested
+on the host and in the browser emulator, and running on a real FM-1. The full description: [docs/SPEC.md](docs/SPEC.md).
 
 **Try it in your browser:** [the Percolator emulator](https://claude.ai/artifact/MTT231c1nvNQsW93vnyYGh): press
 *Switch on*, then play the pads (or your computer keyboard: <kbd>Z</kbd>–<kbd>/</kbd> and <kbd>Q</kbd>–<kbd>P</kbd>);
-SEQ for step mode, PLAY to run.
+PLAY runs the factory pattern, PRESETS picks another.
+
+**Install it on your FM-1:** [the web installer](https://rev3rend.github.io/percolator/webapp/installer/) (Chrome or
+Edge, over USB), or `python3 tools/fm1_install.py percolator-1.0.fwsc` (needs `mido` and `python-rtmidi`). Read
+[Safety](#safety) first. The way back to the official firmware is in both.
+
+## What it does
+
+- **23 tracks, one per Shakers instrument:** maraca, cabasa, sekere, tambourine, sleigh bells, bamboo chimes, sand
+  paper, coke can, sticks, crunch, big and little rocks, the mug and its five coins, guiro, wrench, water drops and
+  tuned bamboo chimes, each with energy, decay, objects and frequency on the knobs, level and pan.
+- **A step sequencer:** 16 steps per track, accents, parameter locks, probability, ratchets (x2..x4, flat, up, down),
+  conditions (A:B, FILL, FIRST), nudge, per-track length and clock divide, swing, note repeat, live record, mute and
+  solo; a GRID of all 23 tracks and a TRACK view of one.
+- **Patterns, kits, songs:** 32 named patterns (24 factory ones in four styles: hand percussion, ambient, metal and
+  industrial, generative), 12 named kits (8 factory), 8 songs (4 factory tours); a pattern brings its kit; FACTORY
+  RESTORE.
+- **Effects on the mix:** filter and drive (before or after the rest), chorus, ping-pong delay that follows the
+  tempo, a short room reverb, a soft limiter; saved with the kit.
+- **MIDI:** notes and CCs in over USB and TRS; clock in and out (start, stop, continue, song position); each hit as
+  a note, the knobs as CCs and the pattern as Program Change out over USB.
+- **Accessible:** speaks through the [fm1-reader](https://github.com/charlesvestal/fm1-reader) screen reader: connect
+  the FM-1 by USB, open <https://charlesvestal.github.io/fm1-reader/> in Chrome or Edge, and every screen, track,
+  step, knob, pattern and message is spoken in full words. The FM-1 stays silent on USB until a reader asks. A
+  MIDItoSpeech device file for [synthaccess](https://github.com/IDMNYU/synthaccess) speaks what it sends:
+  [docs/synthaccess/Percolator.json](docs/synthaccess/Percolator.json).
+- Shows up over USB as "Percolator FM-1".
 
 The sound models are Perry Cook's PhISEM, from the `Shakers` class of the
 [Synthesis ToolKit (STK)](https://github.com/thestk/stk) by Perry R. Cook and Gary P. Scavone (MIT-style licence:
