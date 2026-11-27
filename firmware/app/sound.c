@@ -461,8 +461,11 @@ static __attribute__((noinline)) void rat_block(uint32_t n)   /* the ratchets' r
 static __attribute__((noinline)) void snd_record(uint32_t t, int accent)   /* a pad while REC runs */
 {
     uint32_t len = tp_len(t), per = tp_per(t), last = snd.tick ? snd.tick - 1u : 0u, k, pos;
-    uint64_t now = (uint64_t)last * TICK_UNITS + snd.phase, step = (uint64_t)per * TICK_UNITS;
-    k = (uint32_t)((now + step / 2u) / step);    /* the nearest of the track's steps */
+    /* the nearest of the track's steps: the one played (last / per) or the next, by where in its step we are
+     * (32-bit: per x TICK_UNITS <= 10.6 M; the target has no 64-bit divide) */
+    k = last / per;
+    if (2u * ((last % per) * TICK_UNITS + snd.phase) >= per * TICK_UNITS)
+        k++;
     if (k > last / per) {                        /* ahead of the playhead: heard as the pad, not again a moment later */
         snd.rec_skip |= 1u << t;
         snd.rec_skip_pos[t] = (uint8_t)(k % len);

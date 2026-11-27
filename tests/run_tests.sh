@@ -38,6 +38,9 @@ fail=0
 run() { echo "== $1"; shift; "$@" || fail=1; }
 
 [ -f build/firmware.fwsc ] || { echo "run ./build.sh first"; exit 1; }
+# a firmware older than its sources: ./build.sh failed (or was not run) and the tests would pass on a stale image
+stale=$(find firmware tools -newer build/firmware.fwsc \( -name '*.c' -o -name '*.h' -o -name '*.py' \) | head -3)
+[ -z "$stale" ] || { echo "build/firmware.fwsc is older than: $stale (run ./build.sh; did it fail?)"; echo "HOST TESTS FAILED"; exit 1; }
 
 # ---------------------------------------------------------------- platform
 $CC -w -o "$OUT/input_test" tests/input_test.c

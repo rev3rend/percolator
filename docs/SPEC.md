@@ -218,8 +218,8 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
 - **Checked against STK itself:** `tests/stk/` holds STK's Shakers source, unmodified; the suite builds it and compares
   every instrument at its defaults and with DECAY, OBJECTS and FREQ moved (32 hits each): the spectrum's centroid
   within 15 %, the decay time within 25 %, the level within 3 dB. Shown but not compared where the port differs on
-  purpose (FREQ on varied frequencies; Water's decay and colour, which STK cuts at 25 ms; the coins at low DECAY,
-  which STK cuts while they still ring).
+  purpose (FREQ on varied frequencies; Water's decay, colour and level, which STK cuts at ~25 ms while a drop is still
+  building; the coins at low DECAY, which STK cuts while they still ring). Holds on macOS and Linux (CI).
 - **Parameters per track (0..127, as STK's controls):** ENERGY (shake energy per hit; STK CC 2), DECAY (system
   decay; CC 11), OBJECTS (number of objects; CC 4), FREQ (resonance frequency ×4^(v/128 − 0.5); CC 1). STK's code
   maps CC 11 to the system decay and CC 4 to the number of objects (`__SK_ShakerDamping_`, `__SK_ShakerNumObjects_`);
@@ -371,6 +371,9 @@ Each can be tested on the host and heard in the emulator.
 6. **Conditions and time (done 2026-11-26):** conditional trigs (A:B, FIRST, NOT FIRST, FILL, NOT FILL), FILL on
    ARP held, nudge early and late (a lookahead for the early ones), per-track clock divide, swing, note repeat. The
    clock now runs at 4 ticks per 16th; each piece tested to the sample block and proved against a broken version.
+   (The first install of it was a stale image: the link failed on a 64-bit divide the pi32v2 toolchain lacks, and
+   the old firmware was installed. tests/run_tests.sh now refuses a firmware older than its sources. The STK
+   comparison was also made to hold on Linux: STK's dice are the C library's rand(), different per platform.)
 7. **MIDI sync:** clock in (EXT / AUTO), clock out, notes out, start / stop / continue.
 8. **Songs and kits:** the SONG screen, chains, 4 songs, 4 kits, the SAVE screen for all three.
 9. **Effects:** chorus, master filter and drive, delay, reverb (in that order, each measured).

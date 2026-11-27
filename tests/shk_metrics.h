@@ -2,8 +2,9 @@
  * Copyright (C) 2026 R. Luke DuBois */
 /* What the Shakers reference test measures of one rendered hit, the same code for STK (tests/shakers_ref.cpp, C++)
  * and for Percolator's engine (tests/shakers_test.c, C): the power spectrum of the first 8192 samples (Hann window,
- * radix-2 FFT, summed over hits), its centroid; the decay time from the loudest 10 ms frame to 30 dB below it; the
- * peak. Hits are random (the collisions are dice), so the test compares means over several hits. */
+ * radix-2 FFT, summed over hits), its centroid; the decay time from the loudest 10 ms frame to the last frame within
+ * 30 dB of it (the last: bursts with gaps between them, a ratchet's sweeps, sparse collisions, do not cut it short);
+ * the peak. Hits are random (the collisions are dice), so the test compares means over several hits. */
 #ifndef SHK_METRICS_H
 #define SHK_METRICS_H
 #include <math.h>
@@ -76,14 +77,14 @@ static void shk_add(shk_acc *a, const double *x)    /* one hit of SHK_LEN sample
         }
     }
     lim = fmax * 1e-3;                               /* -30 dB in power */
-    for (fend = fpk; fend < nf; fend++) {
+    for (fend = nf - 1; fend > fpk; fend--) {        /* the last frame above it */
         double e = 0.0;
         for (i = 0; i < SHK_FRAME; i++)
             e += x[fend * SHK_FRAME + i] * x[fend * SHK_FRAME + i];
-        if (e < lim)
+        if (e >= lim)
             break;
     }
-    a->decay_sum += (double)(fend - fpk) * SHK_FRAME / SHK_FS;
+    a->decay_sum += (double)(fend + 1 - fpk) * SHK_FRAME / SHK_FS;
     a->peak_sum += peak;
     a->hits++;
 }
@@ -107,4 +108,7 @@ enum { SHK_DEFAULT, SHK_FREQ_HI, SHK_DECAY_LO, SHK_OBJ_HI, SHK_NCASE };
 static const char *const SHK_CASE[SHK_NCASE] = {"defaults", "FREQ 112", "DECAY 32", "OBJECTS 100"};
 static const int SHK_PARAM[SHK_NCASE][3] = {{64, 64, 64}, {64, 64, 112}, {32, 64, 64}, {64, 100, 64}};  /* D O F */
 #define SHK_AMP (200.0 / 256.0)                       /* ENERGY 100 */
+/* hits per case: more for the instruments whose hits differ most (sparse collisions, ratchets, drops); STK's dice
+ * are the C library's rand(), different on every platform, so the means must hold on any of them */
+static int shk_hits(int t) { return t == 5 || t == 8 || t == 19 || t == 20 || t == 21 || t == 22 ? 128 : 48; }
 #endif

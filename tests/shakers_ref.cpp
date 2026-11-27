@@ -16,8 +16,6 @@ extern "C" {
 }
 using namespace stk;
 
-static const int HITS = 32;
-
 int main()
 {
     static double buf[SHK_LEN];
@@ -26,7 +24,7 @@ int main()
         for (int c = 0; c < SHK_NCASE; c++) {
             static shk_acc acc;
             memset(&acc, 0, sizeof acc);
-            int hits = t == 21 ? HITS * 4 : HITS;       // Water: two hits in three are silent in STK
+            int hits = t == 21 ? shk_hits(t) * 3 : shk_hits(t);   // Water: two hits in three are silent in STK
             for (int h = 0; h < hits; h++) {
                 srand(1000u * t + 17u * c + h + 1u);
                 Shakers s(t);

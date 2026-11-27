@@ -6,14 +6,15 @@
  * the level (the engine's output taken back to STK's units through SK_OUTG). Where the port departs from STK on
  * purpose (docs/SPEC.md), the case is shown but not compared: FREQ on the varying resonances and on Water (STK undoes
  * the control at the next collision), and Water's decay and centroid (STK cuts every sound when the energy falls
- * below 0.001, ~25 ms for Water, before a drop's upward sweep; here the drops ring out). Water's level is compared.
+ * below 0.001, ~25 ms for Water, before a drop's upward sweep; here the drops ring out). Nor Water's level: the cut
+ * also stops a drop while its resonance is still building up, so STK's level depends on the cut (and on the dice:
+ * 0..4.4 dB under ours, by platform). Water is shown; that every hit sounds is checked.
  * The same cut shortens STK's long resonances (the coins) when DECAY is low: where STK's decay reaches the time its
  * energy takes to fall to 0.001 (stk_cut), ours may be longer, never shorter.
  *   build/host/shakers_test build/host/stk_ref.txt */
 #include "host_platform.h"
 #include "shk_metrics.h"
 
-#define HITS 32
 #define CENT_TOL 0.15            /* the centroid within 15 % */
 #define DECAY_TOL 0.25           /* the decay within 25 % (or a frame and a bit) */
 #define LEVEL_DB 3.0             /* the level within 3 dB */
@@ -64,7 +65,7 @@ static void render_case(uint32_t t, uint32_t c, shk_acc *acc)   /* our engine, o
     kit.t[t].p[SP_DEC] = (uint8_t)SHK_PARAM[c][0];
     kit.t[t].p[SP_OBJ] = (uint8_t)SHK_PARAM[c][1];
     kit.t[t].p[SP_FRQ] = (uint8_t)SHK_PARAM[c][2];
-    for (h = 0; h < (uint32_t)HITS; h++) {
+    for (h = 0; h < (uint32_t)shk_hits((int)t); h++) {
         voice_silence(t);
         snd.v[t].seed = 0x2545F491u * (1000u * t + 17u * c + h + 1u);
         snd_hit(t, 200);                                      /* ENERGY 100 */
@@ -111,10 +112,10 @@ int main(int argc, char **argv)
                    (SK_KIND[t] != SK_RATCHET && rd >= 0.8 * stk_cut(t, (uint32_t)SHK_PARAM[c][0]) && dec > rd);
             if (ok_d && !water && fabs(dec - rd) > DECAY_TOL * rd + 0.015)
                 cut++;
-            ok_l = fabs(db) <= LEVEL_DB;
+            ok_l = water || fabs(db) <= LEVEL_DB;    /* (STK cuts a drop before its resonance has built up) */
             printf("  %-20s %-11s %7.0f %7.0f %6.3f %6.3f %+6.1f %s\n", SK_NAME[t], SHK_CASE[c], rc, cen, rd, dec, db,
                    !compared ? "(not compared: FREQ on varied frequencies, on purpose)"
-                   : !(ok_c && ok_d && ok_l) ? "  <--" : water ? "(level only: STK cuts the drops)"
+                   : !(ok_c && ok_d && ok_l) ? "  <--" : water ? "(not compared: STK cuts the drops)"
                    : fabs(dec - rd) > DECAY_TOL * rd + 0.015 ? "(longer: STK cuts the ringing)" : "");
             if (acc.silent)
                 quiet_ok = 0;
