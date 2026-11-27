@@ -79,6 +79,7 @@ static struct {
     uint32_t frames;
     uint32_t splash_until;
     uint32_t cpu_next, cpu_win_end, cpu_late0;
+    uint8_t restore, restore_slot;   /* FACTORY RESTORE: 1 asked, 2 erasing (restore_slot the next record) */
     uint8_t cpu_win, cpu_prev;   /* the worst half (%) of this window and of the one before */
 } ui;
 
@@ -220,6 +221,7 @@ static void save_store(void)
         if (ui.save_slot != pat_index())
             pats[ui.save_slot] = pat;            /* save as: the slot gets a copy, and is played from now on */
         pat_cur = &pats[ui.save_slot];
+        pat.kitno = (uint8_t)(kit_index() + 1u); /* the kit in use is saved with it (KIT FOLLOWS PATTERN) */
         r = data_save_pattern(ui.save_slot);
         label2(b, sizeof b, 'P', ui.save_slot + 1u);
     } else if (ui.save_what == SV_KIT) {
@@ -735,6 +737,17 @@ static int slot_used(uint32_t what, uint32_t i)
     return what == SV_PAT ? (pat_stored >> i) & 1u : what == SV_KIT ? (kit_stored >> i) & 1u : songs.s[i].n > 0u;
 }
 
+static const char *slot_state(uint32_t what, uint32_t i)   /* what a SAVE would replace */
+{
+    if (slot_used(what, i))
+        return what == SV_SONG ? "REPLACES THE SONGS SAVED" : "REPLACES YOUR SAVED ONE";
+    if (what == SV_PAT)
+        return i < FP_N ? "REPLACES A FACTORY PATTERN" : "EMPTY SLOT";
+    if (what == SV_KIT)
+        return i < FK_N ? "REPLACES A FACTORY KIT" : "A DEFAULT KIT";
+    return "SAVES ALL EIGHT SONGS";
+}
+
 static void draw_save(void)
 {
     char b[24];
@@ -744,7 +757,7 @@ static void draw_save(void)
     cv_text_in(0, 30, 240, &AF_M, SV_NAME[ui.save_what], T_TEXT, T_BG);
     label2(b, sizeof b, ui.save_what == SV_PAT ? 'P' : ui.save_what == SV_KIT ? 'K' : 'S', ui.save_slot + 1u);
     cv_text_in(0, 56, 240, &AF_L, b, T_ACCENT, T_BG);
-    cv_text_in(0, 96, 240, &AF_S, slot_used(ui.save_what, ui.save_slot) ? "REPLACES WHAT IS THERE" : "EMPTY SLOT",
+    cv_text_in(0, 96, 240, &AF_S, slot_state(ui.save_what, ui.save_slot),
                T_MID, T_BG);
     cv_blit(0, 0);
     cv_begin(240, 116, T_BG);
@@ -818,8 +831,51 @@ static uint32_t sig_song(void)
     return fnv_s(h, msg_now());
 }
 
+static void draw_restore(void)                   /* FACTORY RESTORE: the question, then the progress */
+{
+    char b[24], t[8];
+    cv_begin(240, 124, T_BG);
+    cv_text_in(0, 14, 240, &AF_M, "FACTORY RESTORE", T_THEME, T_BG);
+    if (ui.restore == 1u) {
+        cv_text_in(0, 48, 240, &AF_S, "ERASES EVERY SAVED PATTERN,", T_TEXT, T_BG);
+        cv_text_in(0, 66, 240, &AF_S, "KIT, SONG AND SETTING", T_TEXT, T_BG);
+        cv_text_in(0, 92, 240, &AF_S, "AND BRINGS BACK THE FACTORY SET", T_MID, T_BG);
+    } else {
+        str_cpy(b, "RESTORING ", sizeof b);
+        fmt_int(t, (int32_t)ui.restore_slot);
+        cat(b, t, sizeof b);
+        cat(b, " / 35", sizeof b);
+        cv_text_in(0, 60, 240, &AF_M, b, T_ACCENT, T_BG);
+    }
+    cv_blit(0, 0);
+    cv_begin(240, 116, T_BG);
+    if (ui.restore == 1u) {
+        cv_text_in(0, 30, 240, &AF_M, "SAVE: RESTORE", T_REC, T_BG);
+        cv_text_in(0, 60, 240, &AF_S, "ANY OTHER BUTTON: CANCEL", T_MID, T_BG);
+    }
+    cv_blit(0, 124);
+}
+
+static void restore_step(void)                   /* one record a frame (two erases): the main loop stays alive */
+{
+    if (ui.restore != 2u)
+        return;
+    if (ui.restore_slot < SLOT_SONGS + 1u) {
+        data_erase_slot(ui.restore_slot++);
+        return;
+    }
+    data_load();                                 /* nothing saved any more: the factory set */
+    snd.sel = (uint8_t)sel();
+    ui.restore = 0;
+    ui.queued = 0;
+    ui.page = PG_HOME;
+    msg("FACTORY SET RESTORED");
+}
+
 static uint32_t screen_id(void)
 {
+    if (ui.restore)
+        return 0xF3u;
     if (ui.saving)
         return 0xF1u;
     if (ui.song_open)
@@ -871,6 +927,13 @@ static void ui_draw(void)
         ui.drawn_screen = (uint8_t)scr;
         for (i = 0; i < 16u; i++)
             ui.sig[i] = ~0u;
+    }
+    if (ui.restore) {
+        h = fnv(fnv(FNV0, ui.restore), ui.restore_slot);
+        if (h != ui.sig[0])
+            draw_restore();
+        ui.sig[0] = h;
+        return;
     }
     if (ui.saving) {
         h = fnv_s(fnv(fnv(fnv(FNV0, ui.save_what), ui.save_slot), (uint32_t)slot_used(ui.save_what, ui.save_slot)), m);
@@ -1188,6 +1251,18 @@ static void ui_keys(void)
 
 static void button_press(uint32_t b)
 {
+    if (ui.restore) {                            /* FACTORY RESTORE asked: SAVE confirms, anything else cancels */
+        ui.held_fired[b] = 1;
+        if (ui.restore == 1u && b == B_SAVE) {
+            snd.run_req = 2;                     /* stopped first; the erases fade the sound */
+            ui.restore = 2;
+            ui.restore_slot = 0;
+        } else if (ui.restore == 1u) {
+            ui.restore = 0;
+            msg("RESTORE CANCELLED");
+        }
+        return;
+    }
     if (ui.saving) {
         if (b == B_SAVE)
             save_store();
@@ -1267,6 +1342,10 @@ static void button_press(uint32_t b)
             }
             break;
         }
+        if (ui.page == PG_GLO3) {                /* GLOBAL 3: SAVE asks for the FACTORY RESTORE */
+            ui.restore = 1;
+            break;
+        }
         ui.saving = 1;
         ui.song_open = 0;
         ui.save_what = SV_PAT;
@@ -1278,7 +1357,7 @@ static void button_press(uint32_t b)
     case B_ENV: page_open(ui.page == PG_SOUND ? PG_TRACK : ui.page == PG_TRACK ? PG_TRACK2 : PG_SOUND); break;
     case B_LFO: page_open(PG_RANDOM); break;
     case B_SCL: page_open(PG_TIME); break;
-    case B_GLO: page_open(ui.page == PG_GLO ? PG_GLO2 : PG_GLO); break;
+    case B_GLO: page_open(ui.page == PG_GLO ? PG_GLO2 : ui.page == PG_GLO2 ? PG_GLO3 : PG_GLO); break;
     case B_OCTDN:
     case B_OCTUP: {
         int32_t base = ui.queued ? ui.queued - 1 : (int32_t)pat_index();
@@ -1329,12 +1408,12 @@ static void ui_leds(void)
         case B_REC: on |= ui.rec; break;
         case B_SEQ: on |= ui.mode; break;
         case B_HOME: on |= ui.page == PG_HOME && !ui.saving; break;   /* (SONG is a HOME view too) */
-        case B_SAVE: on |= ui.saving && blink; break;
+        case B_SAVE: on |= (ui.saving || ui.restore == 1u) && blink; break;
         case B_ENV: on |= ui.page == PG_SOUND || ui.page == PG_TRACK || ui.page == PG_TRACK2; break;
         case B_SCL: on |= ui.page == PG_TIME; break;
         case B_LFO: on |= ui.page == PG_RANDOM; break;
         case B_FX: on |= ui.page >= PG_FX1 && ui.page <= PG_FX4; break;
-        case B_GLO: on |= ui.page == PG_GLO || ui.page == PG_GLO2; break;
+        case B_GLO: on |= ui.page >= PG_GLO && ui.page <= PG_GLO3; break;
         case B_OCTDN:
         case B_OCTUP: on |= ui.queued && blink; break;
         }
@@ -1377,6 +1456,7 @@ static void ui_frame(void)
         snd.swapped = 0;
         ui.queued = 0;
     }
+    restore_step();
     ui_buttons();
     ui_keys();
     ui_encoders();

@@ -182,7 +182,8 @@ FX 4 REVERB: SIZE, DAMPING, LEVEL, and MASTER (the kit's output level). All are 
 
 ### GLOBAL page (GLO)
 
-MIDI channel (1..16, OMNI), base note (default 53 = F3), CLOCK source (INT / EXT / AUTO), TRS MIDI IN (on / off,
+GLOBAL 3: KIT FOLLOWS PATTERN (on / off, default on) and FACTORY RESTORE (SAVE: see "What is stored").
+GLOBAL: MIDI channel (1..16, OMNI), base note (default 53 = F3), CLOCK source (INT / EXT / AUTO), TRS MIDI IN (on / off,
 default on); GLOBAL 2: CLOCK OUT (on / off), NOTES OUT (on / off), and the CPU meter (read-only rows): CPU LOAD, the
 audio ISR's average share of its 2.9 ms half (the platform's `audio_cpu_q8`, ~93 ms), and CPU PEAK, the worst single
 half in the last 2..4 s (`audio_max_us`: what decides a crackle), with LATE n when halves have missed their deadline
@@ -309,20 +310,38 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
 
 ## What is stored
 
-The store has 36 records of 4 KB, `APP_ID` per firmware. All 16 patterns and the 4 kits are also kept in RAM (the
-pool, ~43 KB of ~380 KB): changing patterns is a pointer swap at the bar line in the audio ISR (no flash read while
-playing), and edits survive changing patterns until power-off; SAVE writes the shown pattern (or kit, or the songs)
-to flash, and "save as" another slot copies it there and plays from that slot.
+The store has 36 records of 4 KB, `APP_ID` per firmware. All 32 patterns and the 12 kits are also kept in RAM (the
+pool: 371 KB of 391 KB with the delay's lines): changing patterns is a pointer swap at the bar line in the audio ISR
+(no flash read while playing), and edits survive changing patterns until power-off; SAVE writes the shown pattern
+(or kit, or the songs) to flash, and "save as" another slot copies it there and plays from that slot.
 
-| Record | Count | Contents |
+| Record (slot) | Count | Contents |
 | --- | --- | --- |
-| Settings | 1 | global page, last pattern / kit / song, screen choices |
-| Patterns | 16 | 23 tracks × 16 steps × ~7 bytes (trig / accent / condition, probability, ratchet + nudge, 4 locks) ≈ 2.6 KB, plus per-track length, divide, mute, solo, the pattern's tempo and swing, a record version |
-| Kits | 4 | per track: the four parameters, level, pan (and the unused send bytes, kept for the format); the FX settings (every FX page). Milestone 9 appended POSITION and the chorus RATE at the end (a kit saved before loads with PRE and the default rate) |
-| Songs | 4 | up to 64 × (pattern, repeats), loop flag (four songs can share one record) |
+| Settings (0) | 1 | global pages, last pattern / kit / song, screen choices, KIT FOLLOWS PATTERN (appended) |
+| Patterns (1..32) | 32 | 23 tracks × 16 steps × ~7 bytes (trig / accent / condition, probability, ratchet + nudge, 4 locks) ≈ 2.6 KB, per-track length, divide, mute, solo, the pattern's tempo and swing, and (appended 2026-11-27) the kit saved with it |
+| Kits (33) | 12 in one record | each kit in a fixed 256-byte stride (a kit that grows keeps every kit in place) and a mask of the kits saved; per track the four parameters, level, pan; the FX settings. Kept in RAM as stored, so saving one kit never stores another's unsaved edits |
+| Songs (34) | 8 in one record | up to 64 × (pattern, repeats), loop flag |
 
-That is 25 records at most (fewer if songs share one), leaving room for later. Damaged or foreign records are
-ignored and replaced by defaults; every value is range-checked on load.
+35 of 36 records. Damaged or foreign records are ignored; every value is range-checked on load.
+
+**Factory content** (`tools/gen_factory.py`, in the firmware, not in the store): a slot with no saved record plays
+the factory version, so a fresh unit is full and saving over a factory slot is an edit:
+
+| Style | Kits | Patterns (each with its kit) | Song |
+| --- | --- | --- | --- |
+| Hand percussion | K1 STUDIO, K2 CLUB | P01 SAMBA, P02 SON CLAVE, P03 WEST AFRICAN BELL (12 steps), P04 TAMBOURINE SOUL | S1 HAND TOUR |
+| Ambient | K3 RAIN ROOM, K4 GLASS GARDEN | P05 RAIN, P06 GLASS GARDEN, P07 TIDE (5 / 7 / 11 / 13 / 9 steps), P08 NIGHT INSECTS | S2 AMBIENT TOUR |
+| Metal and industrial | K5 WORKSHOP, K6 FOUNDRY | P09 WORKSHOP, P10 COINS (a melody of FREQ locks), P11 FACTORY FLOOR, P12 CLANK | S3 METAL TOUR |
+| Generative | K7 CLOCKWORK, K8 DRIFT | P13 POLYMETER (5:7:11:13), P14 PROBABILITY FIELD, P15 CONDITIONS, P16 CLOCKWORK DRIFT | S4 GENERATIVE TOUR |
+
+P17..P32 are blank, K9..K12 the default kit, S5..S8 blank. Each pattern rendered for two bars with its kit peaks
+between −5 and −15 dBFS and leaves the soft limit almost idle (a test). **Kit link:** saving a pattern stores the kit
+in use; when a pattern starts (chosen, queued, reached in a song) its kit comes with it at the bar line, if it has one
+and KIT FOLLOWS PATTERN (GLOBAL 3) is on. **FACTORY RESTORE** (GLOBAL 3, SAVE, then SAVE to confirm, any other
+button cancels): playback stops, every record is erased (one a frame, the screen counting), and the factory set
+comes back. **The old layout** (before 2026-11-27: 16 patterns, 4 kits in slots 17..20, 4 songs in 21) is read once:
+P01..P16 stay where they were, the 4 kits move into K1..K4 and the songs into S1..S4, written at once into the new
+records (a pattern saved later into P17..P21 replaces the old records there).
 
 ## MIDI
 
@@ -436,6 +455,10 @@ Each can be tested on the host and heard in the emulator.
    left at the set time and the second on the right, the room's tail and its exact silence, the chorus's stereo, the
    filter darker / brighter, drive, PRE against POST, app_audio_stop; each proved against a broken version. Pool 324
    KB of 391 KB; no soft float in the chain. CPU with every effect on: to measure on the unit.
+9b. **Factory content (built 2026-11-27):** 32 patterns (P01..P16 factory, the rest blank), 12 kits (K1..K8
+   factory), 8 songs (S1..S4 factory tours), the kit link, KIT FOLLOWS PATTERN and FACTORY RESTORE on GLOBAL 3, the
+   old layout migrated. Tests: the fresh unit's content, every factory pattern sounding, the kit link on and off and
+   saved, the migration written once, the restore through the UI; each proved against a broken version.
 10. **Accessibility:** fm1-reader (the `app_sysex` hook from Solinaesque, `sr.c`, `speak.c`), the MIDItoSpeech
     sidecar.
 11. **The web:** GitHub Pages with the emulator and the web installer, release builds.

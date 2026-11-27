@@ -406,7 +406,7 @@ static void song_enter(uint32_t e)               /* the song's entry e: its patt
     uint32_t t;
     snd.song_e = (uint8_t)e;
     snd.song_left = sg->e[e][1] >= 1u && sg->e[e][1] <= 16u ? sg->e[e][1] : 1u;
-    pat_cur = &pats[sg->e[e][0] % NPAT];
+    pat_switch(sg->e[e][0]);
     snd.next_req = 0;
     snd.swapped = 1;
     snd.tick = 0;
@@ -453,7 +453,7 @@ static __attribute__((noinline)) void seq_tick(void)   /* a clock tick: every tr
         return;
     }
     if (snd.next_req && snd.tick && (snd.tick % (NSTEP * TICKS)) == 0u) {   /* a queued pattern: at the bar line */
-        pat_cur = &pats[(snd.next_req - 1u) % NPAT];
+        pat_switch(snd.next_req - 1u);
         snd.next_req = 0;
         snd.swapped = 1;
         snd.tick = 0;                            /* its tracks from step 1, its loops from FIRST */
@@ -823,7 +823,7 @@ static void app_audio(int32_t *out, uint32_t n)
         snd.song_on = 0;
     }
     if (snd.next_req && !snd.running) {          /* stopped: the queued pattern now */
-        pat_cur = &pats[(snd.next_req - 1u) % NPAT];
+        pat_switch(snd.next_req - 1u);
         snd.next_req = 0;
         snd.swapped = 1;
     }

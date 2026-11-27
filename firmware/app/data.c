@@ -12,17 +12,22 @@
  * off with no locks, probability 100 % and no nudge. */
 
 #include "shk_tables.h"          /* build/gen: tools/gen_shakers.py (STK's Shakers data, fixed point) */
+#include "factory.h"             /* build/gen: tools/gen_factory.py (the factory patterns, kits, songs) */
 
 #define NT 23u                   /* tracks: STK Shakers types 0..22, played by keys 0..22 (F3..D#5) */
 #define NSTEP 16u
-#define NPAT 16u
-#define NKIT 4u
-#define NSONG 4u
+#define NPAT 32u                 /* P01..P16 factory-filled (until saved over), P17..P32 blank */
+#define NKIT 12u                 /* K1..K8 factory, K9..K12 the defaults */
+#define NSONG 8u                 /* S1..S4 factory tours, S5..S8 blank */
 #define SONG_LEN 64u
 #define SLOT_SET 0u
-#define SLOT_PAT0 1u             /* 1..16 */
-#define SLOT_KIT0 17u            /* 17..20 */
-#define SLOT_SONG 21u
+#define SLOT_PAT0 1u             /* 1..32: a pattern each */
+#define SLOT_KITS 33u            /* all 12 kits in one record */
+#define SLOT_SONGS 34u           /* all 8 songs in one record */
+#define OLD_SLOT_KIT0 17u        /* before 2026-11-27: 4 kits in 17..20, 4 songs in 21 (migrated once at power-on) */
+#define OLD_SLOT_SONG 21u
+#define OLD_NKIT 4u
+#define OLD_NSONG 4u
 #define KEY_MUTE 23u             /* the performance keys above the pads (fm1_in.notes bits) */
 #define KEY_SOLO 24u
 #define KEY_ACCENT 25u
@@ -80,15 +85,20 @@ typedef struct {
     uint8_t swing;               /* 50..75 %, 0 = 50 */
     uint16_t tempo2;             /* BPM x 2 (80..480), 0 = 120 BPM */
     tpat_t t[NT];
+    uint8_t kitno;               /* (appended 2026-11-27) the kit saved with it, 1..12 (0: none, the kit stays) */
+    uint8_t spare2[3];
 } pattern_t;
 #define PAT_VER 1u
+#define PAT_SIZE_V1 (4u + NT * sizeof(tpat_t))   /* a pattern record before the kit link (still read) */
 _Static_assert(sizeof(pattern_t) <= 4076u, "a pattern fits one record");
 
-static pattern_t pats[NPAT] __attribute__((section(".pool")));   /* all 16, as edited */
+static pattern_t pats[NPAT] __attribute__((section(".pool")));   /* all 32, as edited */
 static pattern_t *volatile pat_cur = &pats[0];  /* the one being played and edited (the ISR moves it at a bar line) */
 #define pat (*pat_cur)
-static uint16_t pat_stored;      /* bit i: pattern i has a record in flash */
+static uint32_t pat_stored;      /* bit i: pattern i has a record in flash */
 static uint32_t pat_index(void) { return (uint32_t)(pat_cur - pats); }
+static uint32_t kit_index(void);
+static void pat_switch(uint32_t i);              /* (below the kits: a pattern starting, with its kit) */
 
 static uint32_t tp_len(uint32_t t) { uint32_t l = pat.t[t].len; return l && l <= NSTEP ? l : NSTEP; }
 static uint32_t pat_bpm2(void) { uint32_t b = pat.tempo2; return b >= 80u && b <= 480u ? b : 240u; }
@@ -99,6 +109,7 @@ static void pat_check(pattern_t *q)   /* after a load: everything in range (an o
     uint32_t t, s, i;
     q->ver = PAT_VER;
     q->tempo2 = (uint16_t)(q->tempo2 >= 80u && q->tempo2 <= 480u ? q->tempo2 : 240u);
+    q->kitno = q->kitno > NKIT ? 0u : q->kitno;
     q->swing = (uint8_t)(q->swing >= 50u && q->swing <= 75u ? q->swing : 50u);
     for (t = 0; t < NT; t++) {
         tpat_t *p = &q->t[t];
@@ -149,8 +160,9 @@ typedef struct {
 static kit_t kits[NKIT] __attribute__((section(".pool")));
 static kit_t *volatile kit_cur = &kits[0];
 #define kit (*kit_cur)
-static uint8_t kit_stored;       /* bit i: kit i has a record */
+static uint16_t kit_stored;      /* bit i: kit i has been saved (else factory or default) */
 static uint32_t kit_index(void) { return (uint32_t)(kit_cur - kits); }
+
 
 static void kit_default(kit_t *q)
 {
@@ -190,6 +202,7 @@ typedef struct {
     uint8_t last_pat, last_kit, last_song;
     uint8_t view;                /* HOME: 0 GRID, 1 TRACK */
     uint8_t sel;                 /* the selected track */
+    uint8_t kit_follow;          /* (appended 2026-11-27) a pattern starting brings its kit: 1 on, 0 off */
 } settings_t;
 #define SET_VER 1u
 #define NREP 4u
@@ -207,6 +220,7 @@ static void set_default(void)
     set.rep_rate = 1;
     set.bias = 50;
     set.density = 25;
+    set.kit_follow = 1;
 }
 
 static void set_check(void)
@@ -229,6 +243,16 @@ static void set_check(void)
     set.last_song = set.last_song >= NSONG ? 0u : set.last_song;
     set.view = set.view > 1u ? 0u : set.view;
     set.sel = set.sel >= NT ? 0u : set.sel;
+    set.kit_follow = set.kit_follow > 1u ? 1u : set.kit_follow;
+}
+
+/* pattern i starts playing (the ISR at a bar line, or at once when stopped; a song's entry): its kit with it when it
+ * has one and KIT FOLLOWS PATTERN is on (a pointer each: the ISR reads them whole) */
+static void pat_switch(uint32_t i)
+{
+    pat_cur = &pats[i % NPAT];
+    if (set.kit_follow && pat_cur->kitno >= 1u && pat_cur->kitno <= NKIT)
+        kit_cur = &kits[pat_cur->kitno - 1u];
 }
 
 /* --------------------------------------------------------------- songs --- */
@@ -272,19 +296,101 @@ static int32_t data_save_pattern(uint32_t i)
 {
     int32_t r = store_save(SLOT_PAT0 + i, APP_ID, &pats[i], sizeof pats[i]);
     if (!r)
-        pat_stored |= (uint16_t)(1u << i);
+        pat_stored |= 1u << i;
     return r;
 }
+
+/* the kits' record: each kit in its own fixed stride (so a kit_t that grows later keeps every kit in its place) and a
+ * mask of the kits saved; kept in RAM as stored, so saving one kit never stores another's unsaved edits */
+#define KIT_STRIDE 256u
+typedef struct {
+    uint8_t ver;
+    uint8_t n;                   /* kits in the record */
+    uint16_t saved;              /* bit i: kit i holds a saved kit */
+    uint8_t k[NKIT][KIT_STRIDE];
+} kits_rec_t;
+_Static_assert(sizeof(kit_t) <= KIT_STRIDE, "a kit fits its stride");
+_Static_assert(sizeof(kits_rec_t) <= 4076u, "the kits fit one record");
+static kits_rec_t kits_rec __attribute__((section(".pool")));
+
+static int32_t kits_write(void) { return store_save(SLOT_KITS, APP_ID, &kits_rec, sizeof kits_rec); }
 
 static int32_t data_save_kit(uint32_t i)
 {
-    int32_t r = store_save(SLOT_KIT0 + i, APP_ID, &kits[i], sizeof kits[i]);
+    int32_t r;
+    memset(kits_rec.k[i], 0, KIT_STRIDE);
+    memcpy(kits_rec.k[i], &kits[i], sizeof kits[i]);
+    kits_rec.ver = 1;
+    kits_rec.n = NKIT;
+    kits_rec.saved |= (uint16_t)(1u << i);
+    r = kits_write();
     if (!r)
-        kit_stored |= (uint8_t)(1u << i);
+        kit_stored |= (uint16_t)(1u << i);
     return r;
 }
 
-static int32_t data_save_songs(void) { return store_save(SLOT_SONG, APP_ID, &songs, sizeof songs); }
+static int32_t data_save_songs(void) { return store_save(SLOT_SONGS, APP_ID, &songs, sizeof songs); }
+
+/* ---------------------------------------------------------------- factory --- */
+static void factory_pattern(uint32_t i, pattern_t *q)   /* P(i + 1) as shipped (build/gen/factory.h) */
+{
+    uint32_t t, k;
+    memset(q, 0, sizeof *q);
+    if (i >= FP_N)
+        return;
+    q->tempo2 = FP_HDR[i][0];
+    q->swing = (uint8_t)FP_HDR[i][1];
+    q->kitno = (uint8_t)FP_HDR[i][2];
+    for (t = 0; t < NT; t++) {
+        q->t[t].len = FP_TRK[i][t][0];
+        q->t[t].div = FP_TRK[i][t][1];
+    }
+    for (k = FP_IDX[i]; k < FP_IDX[i + 1u]; k++) {
+        const uint8_t *e = FP_STEP[k];
+        step_t *st = &q->t[e[0] % NT].s[e[1] % NSTEP];
+        st->f = e[2];
+        st->prob = e[3];
+        st->rat = e[4];
+        st->lock[0] = e[5];
+        st->lock[1] = e[6];
+        st->lock[2] = e[7];
+        st->lock[3] = e[8];
+    }
+}
+
+static void factory_kit(uint32_t i, kit_t *q)   /* K(i + 1) as shipped; K9..K12: the defaults */
+{
+    uint32_t t, f;
+    kit_default(q);
+    if (i >= FK_N)
+        return;
+    for (t = 0; t < NT; t++) {
+        const uint8_t *e = FK_TRK[i][t];
+        q->t[t].p[0] = e[0];
+        q->t[t].p[1] = e[1];
+        q->t[t].p[2] = e[2];
+        q->t[t].p[3] = e[3];
+        q->t[t].level = e[4];
+        q->t[t].pan = e[5];
+    }
+    for (f = 0; f < NFX; f++)
+        q->fx[f] = FK_FX[i][f];
+}
+
+static void factory_songs(void)                  /* S1..S4 the tours, S5..S8 blank */
+{
+    uint32_t i, e;
+    memset(&songs, 0, sizeof songs);
+    for (i = 0; i < FS_N && i < NSONG; i++) {
+        song_t *sg = &songs.s[i];
+        sg->loop = FS_LOOP[i];
+        for (e = 0; e < 8u && FS_ENT[i][e][0]; e++) {
+            sg->e[e][0] = (uint8_t)(FS_ENT[i][e][0] - 1u);
+            sg->e[e][1] = FS_ENT[i][e][1];
+            sg->n++;
+        }
+    }
+}
 
 static void kit_check(kit_t *q)
 {
@@ -305,42 +411,80 @@ static void kit_check(kit_t *q)
     q->fx[FX_FPOS] = q->fx[FX_FPOS] > 1u ? 0u : q->fx[FX_FPOS];
 }
 
-static void data_load(void)      /* power-on: settings, the 16 patterns, the 4 kits, the songs */
+static void data_load(void)      /* power-on: settings, the 32 patterns, the 12 kits, the 8 songs */
 {
+    static kit_t tmp;
     uint32_t i;
+    int32_t n;
     set_default();
     if (load_into(SLOT_SET, &set, sizeof set) <= 0)
         set_default();
     set_check();
-    pat_stored = 0;
+    pat_stored = 0;                              /* patterns: saved, else factory (P01..P16) or blank */
     for (i = 0; i < NPAT; i++) {
-        pat_clear(&pats[i]);
-        if (load_into(SLOT_PAT0 + i, &pats[i], sizeof pats[i]) > 0)
-            pat_stored |= (uint16_t)(1u << i);
+        memset(&pats[i], 0, sizeof pats[i]);
+        n = load_into(SLOT_PAT0 + i, &pats[i], sizeof pats[i]);
+        if (n >= (int32_t)PAT_SIZE_V1)           /* (a shorter record in 17..21 is the old layout's kit or songs) */
+            pat_stored |= 1u << i;
         else
-            pat_clear(&pats[i]);
+            factory_pattern(i, &pats[i]);
         pat_check(&pats[i]);
     }
-    kit_stored = 0;
+    kit_stored = 0;                              /* kits: saved, else factory (K1..K8) or the defaults */
+    memset(&kits_rec, 0, sizeof kits_rec);
+    if (load_into(SLOT_KITS, &kits_rec, sizeof kits_rec) <= 0) {
+        memset(&kits_rec, 0, sizeof kits_rec);
+        for (i = 0; i < OLD_NKIT; i++) {         /* the old layout's 4 kits, once: into K1..K4, written at once */
+            memset(&tmp, 0, sizeof tmp);
+            n = load_into(OLD_SLOT_KIT0 + i, &tmp, sizeof tmp);
+            if (n >= (int32_t)(sizeof tmp - 2u * (NFX - FX_FPOS)) && n <= (int32_t)sizeof tmp && tmp.ver == KIT_VER &&
+                !((pat_stored >> (OLD_SLOT_KIT0 - SLOT_PAT0 + i)) & 1u)) {
+                memcpy(kits_rec.k[i], &tmp, sizeof tmp);
+                kits_rec.saved |= (uint16_t)(1u << i);
+            }
+        }
+        if (kits_rec.saved) {
+            kits_rec.ver = 1;
+            kits_rec.n = NKIT;
+            kits_write();
+        }
+    }
     for (i = 0; i < NKIT; i++) {
-        kit_default(&kits[i]);
-        if (load_into(SLOT_KIT0 + i, &kits[i], sizeof kits[i]) > 0)
-            kit_stored |= (uint8_t)(1u << i);
-        else
-            kit_default(&kits[i]);
+        factory_kit(i, &kits[i]);
+        if ((kits_rec.saved >> i) & 1u) {
+            memcpy(&kits[i], kits_rec.k[i], sizeof kits[i]);
+            if (kits[i].fx[FX_CRATE] == 0 && kits[i].fx[FX_FPOS] == 0)
+                kits[i].fx[FX_CRATE] = 40;       /* (a kit saved before the chorus rate existed) */
+            kit_stored |= (uint16_t)(1u << i);
+        }
         kit_check(&kits[i]);
     }
+    memset(&songs, 0, sizeof songs);             /* songs: saved, else the old layout's (once), else factory */
+    if (load_into(SLOT_SONGS, &songs, sizeof songs) <= 0) {
+        memset(&songs, 0, sizeof songs);
+        n = load_into(OLD_SLOT_SONG, &songs, sizeof songs);
+        if (n == (int32_t)(4u + OLD_NSONG * sizeof(song_t)) &&
+            !((pat_stored >> (OLD_SLOT_SONG - SLOT_PAT0)) & 1u)) {
+            songs_check();
+            data_save_songs();
+        } else
+            factory_songs();
+    }
+    songs_check();
     pat_cur = &pats[set.last_pat];
     kit_cur = &kits[set.last_kit];
-    memset(&songs, 0, sizeof songs);
-    if (load_into(SLOT_SONG, &songs, sizeof songs) <= 0)
-        memset(&songs, 0, sizeof songs);
-    songs_check();
     song_index = set.last_song;
 }
 
+static void data_erase_slot(uint32_t slot)       /* both copies of a record (FACTORY RESTORE) */
+{
+    st_erase(store_sector(slot, 0));
+    st_erase(store_sector(slot, 1));
+}
+
 /* ------------------------------------------------------ page parameters --- */
-enum { K_NUM, K_PCT, K_PAN, K_LIST, K_BPM2, K_OFF50, K_STEPS, K_CH, K_NOTE, K_ONOFF, K_MS, K_FILT, K_LOAD, K_PEAK };
+enum { K_NUM, K_PCT, K_PAN, K_LIST, K_BPM2, K_OFF50, K_STEPS, K_CH, K_NOTE, K_ONOFF, K_MS, K_FILT, K_LOAD, K_PEAK,
+       K_ACT };                                  /* K_ACT: an action, done with SAVE (its row shows how) */
 #define K_READONLY(k) ((k) >= K_LOAD)     /* measured, shown on a page, not set by its knob */
 
 /* the CPU meter (ui.c cpu_update): the audio ISR's load, % of its 2.9 ms half */
@@ -355,10 +499,11 @@ typedef struct {
     const char *const *list;     /* K_LIST: the names */
 } param_t;
 
-enum { PG_SOUND, PG_TRACK, PG_TRACK2, PG_TIME, PG_RANDOM, PG_FX1, PG_FX2, PG_FX3, PG_FX4, PG_GLO, PG_GLO2, NPAGES,
-       PG_HOME = 0xF0 };
+enum { PG_SOUND, PG_TRACK, PG_TRACK2, PG_TIME, PG_RANDOM, PG_FX1, PG_FX2, PG_FX3, PG_FX4, PG_GLO, PG_GLO2,
+       PG_GLO3, NPAGES, PG_HOME = 0xF0 };
 static const char *const PAGE_NAME[NPAGES] = {"SOUND", "TRACK", "TRACK 2", "TIME", "RANDOM", "FX 1 FILTER",
-                                              "FX 2 CHORUS", "FX 3 DELAY", "FX 4 REVERB", "GLOBAL", "GLOBAL 2"};
+                                              "FX 2 CHORUS", "FX 3 DELAY", "FX 4 REVERB", "GLOBAL", "GLOBAL 2",
+                                              "GLOBAL 3"};
 static const char *const FPOS_NAME[2] = {"PRE", "POST"};
 static const char *const CLOCK_NAME[3] = {"INT", "EXT", "AUTO"};
 static const char *const DLY_NAME[8] = {"1/32", "1/16", "1/16D", "1/8", "1/8D", "1/4", "1/4D", "1/2"};
@@ -384,6 +529,8 @@ static const param_t PP[NPAGES][4] = {
      {"CLOCK", 0, 2, K_LIST, 1, CLOCK_NAME}, {"TRS MIDI IN", 0, 1, K_ONOFF, 1, 0}},
     {{"CLOCK OUT", 0, 1, K_ONOFF, 1, 0}, {"NOTES OUT", 0, 1, K_ONOFF, 1, 0},
      {"CPU LOAD", 0, 100, K_LOAD, 1, 0}, {"CPU PEAK", 0, 100, K_PEAK, 1, 0}},
+    {{"KIT FOLLOWS PATTERN", 0, 1, K_ONOFF, 1, 0}, {"FACTORY RESTORE", 0, 0, K_ACT, 1, 0},
+     {0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}},
 };
 
 static uint8_t mute_tmp, solo_tmp;               /* TRACK 2's MUTE / SOLO rows edit the pattern's flags through these */
@@ -417,6 +564,10 @@ static void *pv_ptr(uint32_t page, uint32_t row, uint32_t t, int *wide)
     case PG_FX4: return &kit.fx[row == 0 ? FX_RSIZE : row == 1 ? FX_RDAMP : row == 2 ? FX_RLVL : FX_MASTER];
     case PG_GLO: return row == 0 ? &set.midi_ch : row == 1 ? &set.base_note : row == 2 ? &set.clock : &set.trs_in;
     case PG_GLO2: return row == 0 ? &set.clock_out : row == 1 ? &set.notes_out : row == 2 ? &cpu_now : &cpu_peak;
+    case PG_GLO3: {
+        static uint8_t none;
+        return row == 0 ? &set.kit_follow : row == 1 ? &none : 0;
+    }
     }
     return 0;
 }
@@ -510,6 +661,7 @@ static void pv_text(char *b, unsigned max, const param_t *q, int32_t v)   /* a v
     case K_ONOFF: str_cpy(b, v ? "ON" : "OFF", max); break;
     case K_MS: fmt_int(t, v); str_cpy(b, t, max); cat(b, " MS", max); break;
     case K_LOAD: fmt_int(t, v); str_cpy(b, t, max); cat(b, "%", max); break;
+    case K_ACT: str_cpy(b, "SAVE", max); break;
     case K_PEAK:
         fmt_int(t, v);
         str_cpy(b, t, max);

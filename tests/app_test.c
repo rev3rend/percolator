@@ -104,12 +104,29 @@ static void power_cycle(void)                    /* the app's RAM gone, the flas
     frames(80);
 }
 
+static void ring_out(void);
+
+static void blank_world(void)                    /* no factory content: blank patterns, default kits, no songs */
+{
+    uint32_t i;
+    for (i = 0; i < NPAT; i++)
+        pat_clear(&pats[i]);
+    for (i = 0; i < NKIT; i++)
+        kit_default(&kits[i]);
+    memset(&songs, 0, sizeof songs);
+    songs_check();
+    pat_cur = &pats[0];
+    kit_cur = &kits[0];
+}
+
 /* ------------------------------------------------------------------- screens --- */
 static void screens(void)
 {
     uint32_t t, s, p;
     host_nor_erase();
     host_boot();
+    blank_world();                               /* (the general checks start from nothing; persistence() tests the
+                                                  * factory set) */
     host_frame();
     check("boot: the splash (name, version) drawn", ink_rows(80, 170) > 30u);
     {   /* the large face is sparse (tools/gen_aa_font.py L_CHARS): a character it lacks draws as a space */
@@ -608,7 +625,153 @@ static void persistence(void)
     power_cycle();
     host_nor_erase();
     power_cycle();
-    check("a fresh unit: pattern 1, kit 1, empty", pat_index() == 0u && kit_index() == 0u && !pat.t[0].s[0].f);
+    {   /* a fresh unit: the factory set (P01..P16, K1..K8, S1..S4), the rest blank / default */
+        static pattern_t fp;
+        static kit_t fk;
+        factory_pattern(0, &fp);
+        pat_check(&fp);
+        factory_kit(0, &fk);
+        kit_check(&fk);
+        check("a fresh unit: P01 is the factory SAMBA (with its kit K1), K1 STUDIO",
+              pat_index() == 0u && kit_index() == 0u && !memcmp(&pats[0], &fp, sizeof fp) && pats[0].kitno == 1u &&
+              !memcmp(&kits[0], &fk, sizeof fk) && pat.t[0].s[0].f != 0);
+        check("a fresh unit: P16 factory, P17..P32 blank", pats[15].kitno == 8u && pats[16].kitno == 0u &&
+                                                            !pats[16].t[0].s[0].f && !pats[31].t[8].s[0].f);
+        kit_default(&fk);
+        check("a fresh unit: K8 factory (DRIFT's delay), K9..K12 the defaults", kits[7].fx[FX_DLVL] == 40u &&
+                                                                                !memcmp(&kits[8], &fk, sizeof fk) &&
+                                                                                !memcmp(&kits[11], &fk, sizeof fk));
+        check("a fresh unit: S1..S4 the factory tours, S5..S8 blank", songs.s[0].n == 4u && songs.s[0].e[3][0] == 3u &&
+                                                                       songs.s[3].n == 4u && songs.s[3].loop &&
+                                                                       !songs.s[4].n && !songs.s[7].n);
+        check("a fresh unit: nothing saved", !pat_stored && !kit_stored && set.kit_follow == 1u);
+    }
+    {   /* every factory pattern plays with its kit: it sounds, and the soft limit has little to do */
+        uint32_t i, k, j, full, ok = 1;
+        int32_t pk;
+        for (i = 0; i < FP_N; i++) {
+            snd.run_req = 2;
+            host_render(buf, 64);
+            ring_out();
+            pat_switch(i);
+            snd.run_req = 1;
+            full = 0;
+            pk = 0;
+            for (k = 0; k < 4u; k++) {           /* 4 s: two bars at most tempi */
+                host_render(buf, 44096);
+                for (j = 0; j < 2u * 44096u; j++) {
+                    pk = abs(buf[j]) > pk ? abs(buf[j]) : pk;
+                    full += abs(buf[j]) >= 32767;
+                }
+            }
+            printf("  factory %-18s K%u: peak %6.1f dBFS%s\n", FP_NAME[i], kit_index() + 1u, 20.0 * log10((pk + 1) / 32768.0),
+                   full ? "  (reaches full scale)" : "");
+            ok &= pk > 2000 && full * 1000u < 2u * 44096u * 4u;
+        }
+        snd.run_req = 2;
+        host_render(buf, 64);
+        ring_out();
+        check("every factory pattern sounds with its kit, under 0.1 % at full scale", ok);
+        pat_switch(0);
+    }
+    {   /* KIT FOLLOWS PATTERN: a pattern starting brings its kit (P05 RAIN: K3); off: the kit stays */
+        queue_pattern(4);
+        host_render(buf, 64);
+        host_frame();
+        check("KIT FOLLOWS PATTERN: P05 brings K3 (RAIN ROOM)", pat_index() == 4u && kit_index() == 2u);
+        queue_pattern(20);                       /* a blank pattern: no kit, the kit stays */
+        host_render(buf, 64);
+        host_frame();
+        check("a blank pattern (P21): the kit stays (K3)", pat_index() == 20u && kit_index() == 2u);
+        set.kit_follow = 0;
+        queue_pattern(8);                        /* P09 WORKSHOP: K5, but off */
+        host_render(buf, 64);
+        host_frame();
+        check("KIT FOLLOWS PATTERN off: the kit stays", pat_index() == 8u && kit_index() == 2u);
+        set.kit_follow = 1;
+        kit_choose(6);                           /* K7; P21 saved with it: it remembers K7 */
+        queue_pattern(20);
+        host_render(buf, 64);
+        host_frame();
+        save_as(SV_PAT, 20);
+        check("SAVE PATTERN: the kit in use saved with it (P21: K7)", pats[20].kitno == 7u && (pat_stored >> 20) & 1u);
+        kit_choose(0);
+        queue_pattern(0);
+        host_render(buf, 64);
+        host_frame();
+        queue_pattern(20);
+        host_render(buf, 64);
+        host_frame();
+        check("P21 again: K7 with it", kit_index() == 6u);
+        power_cycle();
+        check("power-on: P21 and its kit link kept", pats[20].kitno == 7u && pat_index() == 20u);
+    }
+    {   /* the old layout (before 2026-11-27): 4 kits in slots 17..20, 4 songs in 21: moved, written once */
+        static kit_t ok;
+        static uint8_t old_songs[4u + OLD_NSONG * sizeof(song_t)];
+        song_t *os = (song_t *)(old_songs + 4);
+        host_nor_erase();
+        kit_default(&ok);
+        ok.t[2].level = 33;
+        ok.fx[FX_RLVL] = 44;
+        store_save(OLD_SLOT_KIT0 + 1u, APP_ID, &ok, sizeof ok - 2u);   /* a kit saved before the chorus rate */
+        memset(old_songs, 0, sizeof old_songs);
+        old_songs[0] = 1;
+        os[3].n = 1;
+        os[3].e[0][0] = 6;
+        os[3].e[0][1] = 3;
+        store_save(OLD_SLOT_SONG, APP_ID, old_songs, sizeof old_songs);
+        power_cycle();
+        check("the old layout: its kit 2 moved to K2, the factory elsewhere", kits[1].t[2].level == 33u &&
+                                                                              kits[1].fx[FX_RLVL] == 44u &&
+                                                                              kits[1].fx[FX_CRATE] == 40u &&
+                                                                              kits[0].t[0].level == 70u);
+        check("the old layout: its songs moved (S4), S5..S8 blank", songs.s[3].n == 1u && songs.s[3].e[0][0] == 6u &&
+                                                                     !songs.s[4].n);
+        check("the old layout: P17..P21 (its old slots) read as blank patterns", !(pat_stored >> 16) && !pats[17].kitno);
+        {
+            static kits_rec_t kr;
+            check("the old layout: moved into the new records at once", store_load(SLOT_KITS, APP_ID, &kr, sizeof kr) > 0
+                                                                        && kr.saved == 2u &&
+                                                                        store_load(SLOT_SONGS, APP_ID, &songs, sizeof songs) > 0);
+        }
+    }
+    {   /* FACTORY RESTORE (GLOBAL 3, SAVE, SAVE): every record erased, the factory set back */
+        uint32_t k;
+        pats[3].tempo2 = 300;
+        save_as(SV_PAT, 3);
+        kits[0].t[0].level = 12;
+        save_as(SV_KIT, 0);
+        press(B_GLO);
+        press(B_GLO);
+        press(B_GLO);
+        check("GLO three times: GLOBAL 3", ui.page == PG_GLO3);
+        frames(2);
+        shot("page_global3");
+        lint("GLOBAL 3");
+        press(B_SAVE);
+        check("GLOBAL 3, SAVE: the restore is asked", ui.restore == 1u);
+        frames(2);
+        shot("restore_ask");
+        lint("FACTORY RESTORE question");
+        press(B_HOME);
+        check("the restore: any other button cancels", ui.restore == 0u && (pat_stored >> 3) & 1u);
+        press(B_GLO);
+        press(B_GLO);
+        press(B_GLO);
+        press(B_SAVE);
+        press(B_SAVE);
+        for (k = 0; k < 60u && ui.restore; k++)
+            host_frame();
+        check("FACTORY RESTORE: done, the factory set back", !ui.restore && !pat_stored && !kit_stored &&
+                                                             pats[3].tempo2 == FP_HDR[3][0] && kits[0].t[0].level == 70u);
+        check("FACTORY RESTORE: every record erased", store_load(SLOT_PAT0 + 3u, APP_ID, buf, 4076) < 0 &&
+                                                      store_load(SLOT_KITS, APP_ID, buf, 4076) < 0 &&
+                                                      store_load(SLOT_SET, APP_ID, buf, 4076) < 0);
+        power_cycle();
+        check("FACTORY RESTORE: still the factory set after power-on", !pat_stored && kits[0].t[0].level == 70u);
+    }
+    blank_world();
     pat.t[4].s[6].f = ST_TRIG | ST_ACC;
     pat.t[4].s[6].lock[2] = 99;
     pat.t[4].len = 12;
@@ -640,10 +803,10 @@ static void persistence(void)
         host_nor_erase();
         store_save(SLOT_SET, 0x12345678u, other, 64);
         store_save(SLOT_PAT0, 0x12345678u, other, sizeof other);
-        store_save(SLOT_KIT0, 0x12345678u, other, 400);
+        store_save(SLOT_KITS, 0x12345678u, other, 400);
         power_cycle();
-        check("another app's records: ignored (defaults)", !pat.t[0].s[0].f && kit.t[0].level == 80u &&
-                                                            set.base_note == 53u);
+        check("another app's records: ignored (the factory set)", pats[0].kitno == 1u && kit.t[0].level == 70u &&
+                                                                   set.base_note == 53u && !pat_stored);
     }
     {   /* records of ours with values out of range (an older version, a bug, damage): clamped */
         static pattern_t bad;
@@ -652,7 +815,13 @@ static void persistence(void)
         memset(&bad, 0xFF, sizeof bad);
         store_save(SLOT_PAT0, APP_ID, &bad, sizeof bad);
         memset(&kbad, 0xEE, sizeof kbad);
-        store_save(SLOT_KIT0, APP_ID, &kbad, sizeof kbad);
+        {   /* the kits' record: kit 1 saved, all of it damaged */
+            static kits_rec_t kr;
+            memset(&kr, 0, sizeof kr);
+            kr.saved = 1;
+            memcpy(kr.k[0], &kbad, sizeof kbad);
+            store_save(SLOT_KITS, APP_ID, &kr, sizeof kr);
+        }
         memset(&sbad, 0xC8, sizeof sbad);
         store_save(SLOT_SET, APP_ID, &sbad, sizeof sbad);
         power_cycle();
@@ -832,6 +1001,7 @@ static void sound(void)
     int all_ok = 1, all_quiet = 1, all_in = 1;
     double db[NT];
     power_cycle();
+    blank_world();                               /* (from nothing: no factory effects, no kit links) */
     host_render(buf, 1024);
     check("silence at power-on", peak(buf, 1024) == 0);
     for (t = 0; t < NT; t++) {                   /* every instrument: sounds, stays in range, rings out to silence */
