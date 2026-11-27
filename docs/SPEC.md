@@ -394,7 +394,8 @@ Each can be tested on the host and heard in the emulator.
    continue / song position, PLAY deferring to the master. Tests drive a clock at 120 and 150 BPM, pause it, stop,
    continue, set a song position, and check AUTO's fall-back and that nothing is sent while following; each proved
    against a broken version. (Found by them: a first clock's interval, measured from boot, overflowed; and continue
-   mid-step played nothing until the next step: now it resumes on the next 16th, as MIDI counts.)
+   mid-step played nothing until the next step: now it resumes on the next 16th, as MIDI counts.) Confirmed on the
+   unit with a DAW (2026-11-26): clock out and in work, once the DAW selected the renamed port with sync enabled.
 8. **Songs and kits:** the SONG screen, chains, 4 songs, 4 kits, the SAVE screen for all three.
 9. **Effects:** chorus, master filter and drive, delay, reverb (in that order, each measured).
 10. **Accessibility:** fm1-reader (the `app_sysex` hook from Solinaesque, `sr.c`, `speak.c`), the MIDItoSpeech
