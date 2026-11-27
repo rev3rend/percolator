@@ -781,6 +781,7 @@ static void app_audio(int32_t *out, uint32_t n)
     int32_t master;
     if (snd.stop_req) {                          /* before an update or UBOOT: stop, silence, forget */
         snd.stop_req = 0;
+        fx_reset();
         snd.running = 0;
         snd.silence_req = 1;
         snd.next_req = 0;
@@ -900,6 +901,8 @@ static void app_audio(int32_t *out, uint32_t n)
         voice_render(k, mix, n, gl, gr);
     }
     snd.active_pub = snd.active;
+    if (fx_any())                                /* the effects chain (skipped, at no cost, when all are off) */
+        fx_block(mix, n, STEP_UNITS / cur_bpm2());
     for (i = 0; i < 2u * n; i++) {               /* the master level, then the soft limit to Q15 */
         int32_t s = mix[i] * master >> 8, a = s < 0 ? -s : s, e = a - LIM_KNEE;
         if (e > 0) {

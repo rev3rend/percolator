@@ -159,8 +159,8 @@ where they are only the footer's small line). Its title names the track ("SOUND 
 
 ### TRACK page (ENV, second)
 
-The selected track: LEVEL (0..100), PAN (L50..R50), DELAY send, REVERB send (0..100); sub-page 2: LENGTH (1..16),
-CLOCK DIVIDE (1/1, 1/2, 1/4, 2/1...), MUTE, SOLO.
+The selected track: LEVEL (0..100), PAN (L50..CENTER..R50). (Its DELAY / REVERB SEND rows went in milestone 9: the
+effects are one chain on the whole mix.) TRACK 2: LENGTH (1..16), CLOCK DIVIDE (1/1, 1/2, 1/4, 2/1...), MUTE, SOLO.
 
 ### TIME page (SCL)
 
@@ -175,9 +175,10 @@ track's trigs, with a DENSITY on KNOB 4). Details may change in the milestone.
 
 ### FX pages (FX)
 
-FX 1: DELAY time (tempo-synced divisions or ms), FEEDBACK, DELAY TONE, DELAY level. FX 2: REVERB size, damping,
-REVERB level, CHORUS depth (master). FX 3: master FILTER (low-pass ↔ high-pass, one knob centred = off), RESONANCE,
-DRIVE, MASTER level.
+In the chain's order (FX cycles them): FX 1 FILTER: FILTER (one knob: LOW-PASS n / OFF in the middle / HIGH-PASS n),
+RESONANCE, DRIVE, POSITION (PRE: filter and drive first in the chain; POST: after the reverb). FX 2 CHORUS: DEPTH,
+RATE. FX 3 DELAY: TIME (1/32, 1/16, 1/16D, 1/8, 1/8D, 1/4, 1/4D, 1/2 of the tempo), FEEDBACK (0..95 %), TONE, LEVEL.
+FX 4 REVERB: SIZE, DAMPING, LEVEL, and MASTER (the kit's output level). All are the kit's.
 
 ### GLOBAL page (GLO)
 
@@ -247,15 +248,26 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
 - **Locks:** a step's locks shape the sound it hits for as long as that sound rings (a knob turned meanwhile does
   not change a locked parameter, but does change the unlocked ones); the track's next hit without locks plays the
   knobs again. Pads and MIDI notes always play the knobs (the kit). An ENERGY lock sets the hit's amplitude.
-- **Mix:** per track level, pan, delay send, reverb send. Master: chorus (insert), master filter (LP/HP) with
-  resonance, drive, level. Pan is a balance law (centre: both channels at the track's level; towards a side the other
+- **Mix:** per track level and pan, then the effects chain, the MASTER level and the soft limit. Pan is a balance law (centre: both channels at the track's level; towards a side the other
   channel falls to zero). After the MASTER level (FX 3) and the MASTER pot, a soft limit: straight up to -6 dBFS
   (where a busy pattern peaks at the defaults), then a quadratic knee into full scale (slope 0 at +3.5 dB over), so
   overload bends instead of clipping: everything at maximum (every level 100, MASTER 100, the pot full, accents on
   every 16th of all 23 tracks) reaches full scale in 0.07 % of samples (a hard clip: 1.2 %).
-- **Effects:** a tempo-synced stereo delay (up to ~1 s; the RAM pool decides), a reverb (Freeverb-like or lighter,
-  sized to the budget), a stereo chorus, the master filter and drive. The effects come after the sound is right
-  (milestones), and the reverb is the first to be lightened if the ISR budget is tight.
+- **Effects (milestone 9, `firmware/app/fx.c`, float on the FPU):** one chain on the whole mix, in this order (chosen
+  2026-11-26): [filter → drive if POSITION PRE] → chorus → delay → reverb → [filter → drive if POST] → MASTER → the
+  soft limit. Delay and reverb are inserts: LEVEL adds the effect, the dry signal passes at full level; the delay's
+  echoes go into the reverb. No per-track sends.
+  - filter: a resonant state-variable filter (TPT form), one knob from an 18 kHz-to-~200 Hz low-pass through off to
+    a 20 Hz-to-~5 kHz high-pass; drive: a smooth (tanh-like) saturation, gain 1..10, full scale kept full scale.
+  - chorus: each side a short line read at a swept delay (8 ms ± up to 3 ms), the sides 90° apart; DEPTH sets depth
+    and mix together, RATE 0.1..5 Hz.
+  - delay: ping-pong (the mix's mono sum into the left line, each repeat crossing sides), TIME in note values of the
+    tempo (the external clock's while following one), at most ~1 s (int16 lines, 176 KB of pool: the longest values
+    shorten at slow tempos), a time change glides (~110 ms), FEEDBACK with a TONE low-pass in the loop.
+  - reverb: a short room (chosen 2026-11-26): four lines of 25..40 ms behind two allpasses, Hadamard-mixed, damped;
+    SIZE ~0.2 s..1.4 s to −60 dB.
+  - Off costs nothing (the chain is skipped when every effect is off); every tail ends in exact silence; app_audio_stop
+    silences them at once. A fresh kit has every effect off.
 - **No audio input** (the FM-1 has none).
 
 ## Timing and sequencing
@@ -306,7 +318,7 @@ to flash, and "save as" another slot copies it there and plays from that slot.
 | --- | --- | --- |
 | Settings | 1 | global page, last pattern / kit / song, screen choices |
 | Patterns | 16 | 23 tracks × 16 steps × ~7 bytes (trig / accent / condition, probability, ratchet + nudge, 4 locks) ≈ 2.6 KB, plus per-track length, divide, mute, solo, the pattern's tempo and swing, a record version |
-| Kits | 4 | per track: the four parameters, level, pan, delay and reverb sends; the FX settings (every FX page: delay, reverb, chorus, master filter, drive, level). Milestone 9's effects play from these; any setting it adds goes at the end of the record (an older kit loads with it at its default) |
+| Kits | 4 | per track: the four parameters, level, pan (and the unused send bytes, kept for the format); the FX settings (every FX page). Milestone 9 appended POSITION and the chorus RATE at the end (a kit saved before loads with PRE and the default rate) |
 | Songs | 4 | up to 64 × (pattern, repeats), loop flag (four songs can share one record) |
 
 That is 25 records at most (fewer if songs share one), leaving room for later. Damaged or foreign records are
@@ -352,7 +364,7 @@ ignored and replaced by defaults; every value is range-checked on load.
 
 - The CPU cost of the effects on top of the full model (41 % peak measured in milestone 2): a cap on sounding tracks
   only if the effects push the peak towards 80 %.
-- MUTE / SOLO in STEP mode: EDIT + E5 / F5 (above) may feel awkward; revisit once it is played.
+- (Settled 2026-11-26: MUTE / SOLO in STEP mode are C#5 / D#5; the white keys are only steps.)
 - The encoders have no push switches (settled in the build): mute is on MUTE + pad and the TRACK page; tempo moves
   in whole BPM.
 - (Settled in milestone 8: EDIT held + PRESETS chooses the kit.)
@@ -419,7 +431,11 @@ Each can be tested on the host and heard in the emulator.
    start); kits chosen with EDIT + PRESETS (all four in RAM) and shown in the header; SAVE for all three. Tests play
    a two-entry song through the UI end to end, loop it, start it from an entry, arm it for FA, and check that the
    sound follows the kit chosen.
-9. **Effects:** chorus, master filter and drive, delay, reverb (in that order, each measured).
+9. **Effects (built 2026-11-26):** the chain filter / drive (PRE or POST) → chorus → ping-pong delay → short room →
+   limiter, on the FPU, from the kit's settings; FX pages in the chain's order. Tests: the delay's first echo on the
+   left at the set time and the second on the right, the room's tail and its exact silence, the chorus's stereo, the
+   filter darker / brighter, drive, PRE against POST, app_audio_stop; each proved against a broken version. Pool 324
+   KB of 391 KB; no soft float in the chain. CPU with every effect on: to measure on the unit.
 10. **Accessibility:** fm1-reader (the `app_sysex` hook from Solinaesque, `sr.c`, `speak.c`), the MIDItoSpeech
     sidecar.
 11. **The web:** GitHub Pages with the emulator and the web installer, release builds.

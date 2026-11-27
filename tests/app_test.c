@@ -340,7 +340,8 @@ static void screens(void)
             {B_ENV, 1, PG_SOUND, "page_sound"}, {B_ENV, 1, PG_TRACK, "page_track"},
             {B_ENV, 1, PG_TRACK2, "page_track2"}, {B_SCL, 1, PG_TIME, "page_time"},
             {B_LFO, 1, PG_RANDOM, "page_random"}, {B_FX, 1, PG_FX1, "page_fx1"}, {B_FX, 1, PG_FX2, "page_fx2"},
-            {B_FX, 1, PG_FX3, "page_fx3"}, {B_GLO, 1, PG_GLO, "page_global"}, {B_GLO, 1, PG_GLO2, "page_global2"}};
+            {B_FX, 1, PG_FX3, "page_fx3"}, {B_FX, 1, PG_FX4, "page_fx4"},
+            {B_GLO, 1, PG_GLO, "page_global"}, {B_GLO, 1, PG_GLO2, "page_global2"}};
         uint32_t i, r;
         track_select(18);                        /* "Peso + Mug": the longest short name pair */
         for (i = 0; i < sizeof PG / sizeof PG[0]; i++) {
@@ -362,7 +363,12 @@ static void screens(void)
         }
         host_turn(EN_SELECT, -2);
         host_frame();
-        check("SELECT on a page: the page before", ui.page == PG_FX3);
+        check("SELECT on a page: the page before", ui.page == PG_FX4);
+        {   /* (the widest values above left the effects at their ends: back to a fresh kit's, all off) */
+            static kit_t d;
+            kit_default(&d);
+            memcpy(kit.fx, d.fx, sizeof d.fx);
+        }
     }
     press(B_ENV);                                /* ENV: SOUND first, the selected track's four */
     check("ENV: the SOUND page first", ui.page == PG_SOUND);
@@ -775,6 +781,49 @@ static void render_long(uint32_t frames_)       /* longer than buf: in pieces of
     }
     if (frames_ / CTL)
         host_render(buf, frames_ / CTL * CTL);
+}
+
+
+static int32_t fxbuf[2u * 4u * 44096u];         /* 4 s of the chain's output */
+
+static void fx_off(void)                         /* every effect off (a fresh kit's) */
+{
+    static kit_t d;
+    kit_default(&d);
+    memcpy(kit.fx, d.fx, sizeof d.fx);
+}
+
+static void hit_render(uint32_t t, uint32_t frames_)   /* one pad hit on track t, frames_ (<= 4 s) into fxbuf */
+{
+    uint32_t i;
+    ring_out();
+    snd.v[t].seed = 0x1234567u;                  /* the same dice every time: hits compare like for like */
+    fm1_in.notes = 1u << t;
+    host_render(fxbuf, 64);
+    fm1_in.notes = 0;
+    for (i = 0; i < frames_; i += 44096u)
+        host_render(fxbuf + 2u * i, frames_ - i < 44096u ? frames_ - i : 44096u);
+}
+
+static double win_energy(uint32_t ch, uint32_t from, uint32_t len)   /* sum of squares, one channel */
+{
+    double e = 0.0;
+    uint32_t i;
+    for (i = from; i < from + len; i++)
+        e += (double)fxbuf[2u * i + ch] * fxbuf[2u * i + ch];
+    return e;
+}
+
+static double brightness(uint32_t frames_)       /* first-difference energy over energy (left): high = bright */
+{
+    double d = 0.0, e = 0.0;
+    uint32_t i;
+    for (i = 1; i < frames_; i++) {
+        double a = fxbuf[2u * i], b = fxbuf[2u * (i - 1u)];
+        d += (a - b) * (a - b);
+        e += a * a;
+    }
+    return e > 0.0 ? d / e : 0.0;
 }
 
 static void sound(void)
@@ -1390,6 +1439,99 @@ static void sound(void)
         host_render(buf, 4096);
         check("kit 1 again: track 6 sounds", kit_index() == 0u && peak(buf, 4096) > 400);
         kits[2].t[5].level = 80;
+        seq_reset();
+    }
+    {   /* milestone 9: the effects chain (filter / drive pre or post, chorus, delay, reverb); Sticks, a short hit */
+        double e_dry, e1l, e1r, e2l, e2r, b0, b1;
+        int32_t p0, p1;
+        uint32_t i, diff;
+        seq_reset();
+        fx_off();
+        check("effects all off: the chain is skipped", !fx_any());
+        hit_render(8, 44096);
+        e_dry = win_energy(0, 11025 - 1000, 2000);
+        kit.fx[FX_DLVL] = 80;                    /* delay: 1/8 at 120 BPM = 11025 samples, no feedback */
+        kit.fx[FX_DTIME] = 3;
+        kit.fx[FX_DFB] = 0;
+        kit.fx[FX_DTONE] = 100;
+        hit_render(8, 44096);
+        e1l = win_energy(0, 11025 - 1000, 2000);
+        e1r = win_energy(1, 11025 - 1000, 2000);
+        check("delay 1/8: an echo 11025 samples (a 1/8 at 120 BPM) after the hit", e1l > 100.0 * (e_dry + 1.0));
+        check("delay ping-pong: the first echo on the left", e1l > 20.0 * (e1r + 1.0));
+        kit.fx[FX_DFB] = 60;
+        hit_render(8, 44096);
+        e2l = win_energy(0, 22050 - 1000, 2000);
+        e2r = win_energy(1, 22050 - 1000, 2000);
+        check("delay ping-pong, feedback: the second echo on the right", e2r > 20.0 * (e2l + 1.0) && e2r > 0.0);
+        fx_off();
+        kit.fx[FX_RLVL] = 80;                    /* reverb: a room tail after a dry hit */
+        kit.fx[FX_RSIZE] = 60;
+        hit_render(8, 44096);
+        check("reverb: a room tail 0.1..0.3 s after a short hit", win_energy(0, 4410, 8820) > 1000.0 * (e_dry + 1.0));
+        kit.fx[FX_RLVL] = 0;                     /* off: its tail ends in exact silence */
+        hit_render(8, 4u * 44096u);
+        p0 = 0;
+        for (i = 3u * 44096u; i < 4u * 44096u; i++)
+            p0 = abs(fxbuf[2u * i]) > p0 ? abs(fxbuf[2u * i]) : p0;
+        check("reverb: its tail ends in exact silence", p0 == 0);
+        fx_off();
+        kit.fx[FX_CHORUS] = 80;                  /* chorus: a centred sound becomes stereo */
+        hit_render(4, 22048);
+        for (i = 0, diff = 0; i < 22048u; i++)
+            diff += fxbuf[2u * i] != fxbuf[2u * i + 1u];
+        check("chorus: left and right differ (a centred track)", diff > 5000u);
+        fx_off();
+        hit_render(4, 22048);
+        for (i = 0, diff = 0; i < 22048u; i++)
+            diff += fxbuf[2u * i] != fxbuf[2u * i + 1u];
+        check("chorus off: left = right", diff == 0u);
+        hit_render(11, 8192);                    /* the filter: Little Rocks, bright */
+        b0 = brightness(8192);
+        kit.fx[FX_FILT] = 10;                    /* low-pass, far down */
+        hit_render(11, 8192);
+        b1 = brightness(8192);
+        check("filter low-pass: darker", b1 < 0.3 * b0);
+        kit.fx[FX_FILT] = 90;                    /* high-pass */
+        hit_render(7, 8192);                     /* Coke Can, low */
+        b1 = brightness(8192);
+        kit.fx[FX_FILT] = 50;
+        hit_render(7, 8192);
+        b0 = brightness(8192);
+        check("filter high-pass: brighter (Coke Can's low body gone: ~2x)", b1 > 1.5 * b0);
+        kit.t[8].p[SP_EN] = 20;                  /* drive: a quiet hit comes up */
+        hit_render(8, 4096);
+        p0 = peak(fxbuf, 4096);
+        kit.fx[FX_DRIVE] = 100;
+        hit_render(8, 4096);
+        p1 = peak(fxbuf, 4096);
+        check("drive: a quiet hit louder", p1 > 2 * p0);
+        kit.t[8].p[SP_EN] = 100;
+        {   /* POSITION: drive PRE leaves the delay's echo at its share of a driven hit; POST drives the echo too */
+            double pre, post;
+            fx_off();
+            kit.fx[FX_DLVL] = 50;
+            kit.fx[FX_DFB] = 0;
+            kit.fx[FX_DRIVE] = 100;
+            kit.fx[FX_FPOS] = 0;
+            hit_render(8, 22048);
+            pre = win_energy(0, 11025 - 1000, 2000) / (win_energy(0, 0, 2000) + 1.0);
+            kit.fx[FX_FPOS] = 1;
+            hit_render(8, 22048);
+            post = win_energy(0, 11025 - 1000, 2000) / (win_energy(0, 0, 2000) + 1.0);
+            check("POSITION POST: the echo driven too (louder against the hit than PRE)", post > 1.5 * pre);
+        }
+        fx_off();                                /* app_audio_stop: every tail silenced at once */
+        kit.fx[FX_DLVL] = 80;
+        kit.fx[FX_DFB] = 80;
+        kit.fx[FX_RLVL] = 80;
+        hit_render(8, 22048);
+        app_audio_stop();
+        host_render(fxbuf, 64);
+        host_render(fxbuf, 22048);
+        check("app_audio_stop: the delay and the room silent at once", peak(fxbuf, 22048) == 0);
+        fx_off();
+        host_render(fxbuf, 44096);
         seq_reset();
     }
     while (host_midi_out(&pkt))

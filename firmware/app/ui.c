@@ -1272,7 +1272,9 @@ static void button_press(uint32_t b)
         ui.save_what = SV_PAT;
         ui.save_slot = (uint8_t)pat_index();
         break;
-    case B_FX: page_open(ui.page == PG_FX1 ? PG_FX2 : ui.page == PG_FX2 ? PG_FX3 : PG_FX1); break;
+    case B_FX:                                   /* the chain's order: FILTER, CHORUS, DELAY, REVERB */
+        page_open(ui.page == PG_FX1 ? PG_FX2 : ui.page == PG_FX2 ? PG_FX3 : ui.page == PG_FX3 ? PG_FX4 : PG_FX1);
+        break;
     case B_ENV: page_open(ui.page == PG_SOUND ? PG_TRACK : ui.page == PG_TRACK ? PG_TRACK2 : PG_SOUND); break;
     case B_LFO: page_open(PG_RANDOM); break;
     case B_SCL: page_open(PG_TIME); break;
@@ -1331,7 +1333,7 @@ static void ui_leds(void)
         case B_ENV: on |= ui.page == PG_SOUND || ui.page == PG_TRACK || ui.page == PG_TRACK2; break;
         case B_SCL: on |= ui.page == PG_TIME; break;
         case B_LFO: on |= ui.page == PG_RANDOM; break;
-        case B_FX: on |= ui.page == PG_FX1 || ui.page == PG_FX2 || ui.page == PG_FX3; break;
+        case B_FX: on |= ui.page >= PG_FX1 && ui.page <= PG_FX4; break;
         case B_GLO: on |= ui.page == PG_GLO || ui.page == PG_GLO2; break;
         case B_OCTDN:
         case B_OCTUP: on |= ui.queued && blink; break;

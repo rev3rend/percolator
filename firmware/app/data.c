@@ -136,8 +136,9 @@ typedef struct {
     uint8_t pan;                 /* 0..100, 50 = centre */
     uint8_t dsend, rsend;        /* delay and reverb sends, 0..100 */
 } ktrack_t;
+/* kit.fx[]: the order is stored (append only); the FX pages show them in the chain's order */
 enum { FX_DTIME, FX_DFB, FX_DTONE, FX_DLVL, FX_RSIZE, FX_RDAMP, FX_RLVL, FX_CHORUS, FX_FILT, FX_RES, FX_DRIVE,
-       FX_MASTER, NFX };
+       FX_MASTER, FX_FPOS, FX_CRATE, NFX };      /* FX_FPOS: filter + drive 0 PRE / 1 POST; FX_CRATE: chorus rate */
 typedef struct {
     uint8_t ver;
     uint8_t spare[3];
@@ -170,6 +171,7 @@ static void kit_default(kit_t *q)
     q->fx[FX_RDAMP] = 50;
     q->fx[FX_FILT] = 50;         /* centred: off */
     q->fx[FX_MASTER] = 80;
+    q->fx[FX_CRATE] = 40;        /* ~0.5 Hz (FX_FPOS 0: PRE); every effect off: LEVELs, DEPTH, DRIVE 0 */
 }
 
 /* ------------------------------------------------------------ settings --- */
@@ -300,6 +302,7 @@ static void kit_check(kit_t *q)
     for (i = 0; i < NFX; i++)
         q->fx[i] = q->fx[i] > 100u ? 50u : q->fx[i];
     q->fx[FX_DTIME] = q->fx[FX_DTIME] > 7u ? 3u : q->fx[FX_DTIME];
+    q->fx[FX_FPOS] = q->fx[FX_FPOS] > 1u ? 0u : q->fx[FX_FPOS];
 }
 
 static void data_load(void)      /* power-on: settings, the 16 patterns, the 4 kits, the songs */
@@ -337,7 +340,7 @@ static void data_load(void)      /* power-on: settings, the 16 patterns, the 4 k
 }
 
 /* ------------------------------------------------------ page parameters --- */
-enum { K_NUM, K_PCT, K_PAN, K_LIST, K_BPM2, K_OFF50, K_STEPS, K_CH, K_NOTE, K_ONOFF, K_MS, K_LOAD, K_PEAK };
+enum { K_NUM, K_PCT, K_PAN, K_LIST, K_BPM2, K_OFF50, K_STEPS, K_CH, K_NOTE, K_ONOFF, K_MS, K_FILT, K_LOAD, K_PEAK };
 #define K_READONLY(k) ((k) >= K_LOAD)     /* measured, shown on a page, not set by its knob */
 
 /* the CPU meter (ui.c cpu_update): the audio ISR's load, % of its 2.9 ms half */
@@ -352,30 +355,31 @@ typedef struct {
     const char *const *list;     /* K_LIST: the names */
 } param_t;
 
-enum { PG_SOUND, PG_TRACK, PG_TRACK2, PG_TIME, PG_RANDOM, PG_FX1, PG_FX2, PG_FX3, PG_GLO, PG_GLO2, NPAGES,
+enum { PG_SOUND, PG_TRACK, PG_TRACK2, PG_TIME, PG_RANDOM, PG_FX1, PG_FX2, PG_FX3, PG_FX4, PG_GLO, PG_GLO2, NPAGES,
        PG_HOME = 0xF0 };
-static const char *const PAGE_NAME[NPAGES] = {"SOUND", "TRACK", "TRACK 2", "TIME", "RANDOM", "FX 1 DELAY", "FX 2 REVERB",
-                                              "FX 3 MASTER", "GLOBAL", "GLOBAL 2"};
+static const char *const PAGE_NAME[NPAGES] = {"SOUND", "TRACK", "TRACK 2", "TIME", "RANDOM", "FX 1 FILTER",
+                                              "FX 2 CHORUS", "FX 3 DELAY", "FX 4 REVERB", "GLOBAL", "GLOBAL 2"};
+static const char *const FPOS_NAME[2] = {"PRE", "POST"};
 static const char *const CLOCK_NAME[3] = {"INT", "EXT", "AUTO"};
 static const char *const DLY_NAME[8] = {"1/32", "1/16", "1/16D", "1/8", "1/8D", "1/4", "1/4D", "1/2"};
 
 static const param_t PP[NPAGES][4] = {
     {{"ENERGY", 0, 127, K_NUM, 1, 0}, {"DECAY", 0, 127, K_NUM, 1, 0},     /* the selected track's four (HOME's knobs) */
      {"OBJECTS", 0, 127, K_NUM, 1, 0}, {"FREQ", 0, 127, K_NUM, 1, 0}},
-    {{"LEVEL", 0, 100, K_NUM, 1, 0}, {"PAN", 0, 100, K_PAN, 1, 0},
-     {"DELAY SEND", 0, 100, K_PCT, 0, 0}, {"REVERB SEND", 0, 100, K_PCT, 0, 0}},
+    {{"LEVEL", 0, 100, K_NUM, 1, 0}, {"PAN", 0, 100, K_PAN, 1, 0}, {0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}},
     {{"LENGTH", 1, 16, K_STEPS, 1, 0}, {"CLOCK DIVIDE", 0, NDIV - 1, K_LIST, 1, DIV_NAME},
      {"MUTE", 0, 1, K_ONOFF, 1, 0}, {"SOLO", 0, 1, K_ONOFF, 1, 0}},
     {{"TEMPO", 80, 480, K_BPM2, 1, 0}, {"SWING", 50, 75, K_PCT, 1, 0},
      {"ACCENT", 0, 100, K_PCT, 1, 0}, {"REPEAT RATE", 0, NREP - 1, K_LIST, 1, REP_NAME}},
     {{"HUMAN TIME", 0, 10, K_MS, 0, 0}, {"HUMAN ENERGY", 0, 30, K_PCT, 0, 0},
      {"CHANCE BIAS", 0, 100, K_OFF50, 1, 0}, {"DENSITY", 0, 100, K_PCT, 0, 0}},
-    {{"TIME", 0, 7, K_LIST, 0, DLY_NAME}, {"FEEDBACK", 0, 100, K_PCT, 0, 0},
-     {"TONE", 0, 100, K_PCT, 0, 0}, {"LEVEL", 0, 100, K_PCT, 0, 0}},
-    {{"SIZE", 0, 100, K_PCT, 0, 0}, {"DAMPING", 0, 100, K_PCT, 0, 0},
-     {"LEVEL", 0, 100, K_PCT, 0, 0}, {"CHORUS", 0, 100, K_PCT, 0, 0}},
-    {{"FILTER", 0, 100, K_OFF50, 0, 0}, {"RESONANCE", 0, 100, K_PCT, 0, 0},
-     {"DRIVE", 0, 100, K_PCT, 0, 0}, {"MASTER", 0, 100, K_NUM, 1, 0}},
+    {{"FILTER", 0, 100, K_FILT, 1, 0}, {"RESONANCE", 0, 100, K_PCT, 1, 0},     /* the chain's order */
+     {"DRIVE", 0, 100, K_PCT, 1, 0}, {"POSITION", 0, 1, K_LIST, 1, FPOS_NAME}},
+    {{"DEPTH", 0, 100, K_PCT, 1, 0}, {"RATE", 0, 100, K_NUM, 1, 0}, {0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}},
+    {{"TIME", 0, 7, K_LIST, 1, DLY_NAME}, {"FEEDBACK", 0, 95, K_PCT, 1, 0},
+     {"TONE", 0, 100, K_PCT, 1, 0}, {"LEVEL", 0, 100, K_PCT, 1, 0}},
+    {{"SIZE", 0, 100, K_PCT, 1, 0}, {"DAMPING", 0, 100, K_PCT, 1, 0},
+     {"LEVEL", 0, 100, K_PCT, 1, 0}, {"MASTER", 0, 100, K_NUM, 1, 0}},
     {{"MIDI CHANNEL", 0, 16, K_CH, 1, 0}, {"BASE NOTE", 24, 104, K_NOTE, 1, 0},
      {"CLOCK", 0, 2, K_LIST, 1, CLOCK_NAME}, {"TRS MIDI IN", 0, 1, K_ONOFF, 1, 0}},
     {{"CLOCK OUT", 0, 1, K_ONOFF, 1, 0}, {"NOTES OUT", 0, 1, K_ONOFF, 1, 0},
@@ -407,9 +411,10 @@ static void *pv_ptr(uint32_t page, uint32_t row, uint32_t t, int *wide)
         }
         return row == 1 ? &pat.swing : row == 2 ? &set.accent : &set.rep_rate;
     case PG_RANDOM: return row == 0 ? &set.hum_time : row == 1 ? &set.hum_en : row == 2 ? &set.bias : &set.density;
-    case PG_FX1: return &kit.fx[FX_DTIME + row];
-    case PG_FX2: return &kit.fx[FX_RSIZE + row];
-    case PG_FX3: return &kit.fx[FX_FILT + row];
+    case PG_FX1: return &kit.fx[row == 0 ? FX_FILT : row == 1 ? FX_RES : row == 2 ? FX_DRIVE : FX_FPOS];
+    case PG_FX2: return row == 0 ? &kit.fx[FX_CHORUS] : row == 1 ? &kit.fx[FX_CRATE] : 0;
+    case PG_FX3: return &kit.fx[FX_DTIME + row];
+    case PG_FX4: return &kit.fx[row == 0 ? FX_RSIZE : row == 1 ? FX_RDAMP : row == 2 ? FX_RLVL : FX_MASTER];
     case PG_GLO: return row == 0 ? &set.midi_ch : row == 1 ? &set.base_note : row == 2 ? &set.clock : &set.trs_in;
     case PG_GLO2: return row == 0 ? &set.clock_out : row == 1 ? &set.notes_out : row == 2 ? &cpu_now : &cpu_peak;
     }
@@ -485,6 +490,15 @@ static void pv_text(char *b, unsigned max, const param_t *q, int32_t v)   /* a v
         cat(b, " BPM", max);
         break;
     case K_OFF50: fmt_int(t, v - 50); str_cpy(b, v > 50 ? "+" : "", max); cat(b, t, max); cat(b, "%", max); break;
+    case K_FILT:                                 /* one knob: LP below the middle, HP above, OFF in it */
+        if (v == 50)
+            str_cpy(b, "OFF", max);
+        else {
+            str_cpy(b, v < 50 ? "LOW-PASS " : "HIGH-PASS ", max);
+            fmt_int(t, v < 50 ? 50 - v : v - 50);
+            cat(b, t, max);
+        }
+        break;
     case K_STEPS: fmt_int(t, v); str_cpy(b, t, max); cat(b, v == 1 ? " STEP" : " STEPS", max); break;
     case K_CH:
         if (!v)

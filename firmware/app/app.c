@@ -4,7 +4,8 @@
 /* Percolator: a 23-track percussion sequencer on STK's Shakers (PhISEM) models (docs/SPEC.md). The app contract's
  * five hooks (app.h) and the parts, in dependency order:
  *   data.c    the tracks, the kit, the patterns, the settings, the songs, their records; the page parameters
- *   sound.c   the audio ISR: the 23 Shakers voices, the pads, MIDI in, notes out, the step clock
+ *   fx.c      the effects chain on the mix (FPU): filter / drive (pre or post), chorus, delay, reverb
+ *   sound.c   the audio ISR: the 23 Shakers voices, the pads, MIDI in, notes out, the step clock, the chain
  *   ui.c      the panel: controls, LEDs, the HOME (GRID / TRACK), page, SAVE and SONG screens */
 #ifndef APP_NAME
 #define APP_NAME "PERCOLATOR"
@@ -16,6 +17,7 @@
                                   * drew it), so another firmware's data in the same flash reads as empty */
 
 #include "data.c"
+#include "fx.c"
 #include "sound.c"
 #include "ui.c"
 
