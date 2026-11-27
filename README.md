@@ -33,7 +33,7 @@ Edge, over USB), or `python3 tools/fm1_install.py percolator-1.0.fwsc` (needs `m
   the FM-1 by USB, open <https://charlesvestal.github.io/fm1-reader/> in Chrome or Edge, and every screen, track,
   step, knob, pattern and message is spoken in full words. The FM-1 stays silent on USB until a reader asks. A
   MIDItoSpeech device file for [synthaccess](https://github.com/IDMNYU/synthaccess) speaks what it sends:
-  [docs/synthaccess/Percolator.json](docs/synthaccess/Percolator.json).
+  [docs/synthaccess/](docs/synthaccess/) (how to use it).
 - Shows up over USB as "Percolator FM-1".
 
 The sound models are Perry Cook's PhISEM, from the `Shakers` class of the
