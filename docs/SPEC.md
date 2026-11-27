@@ -374,6 +374,7 @@ Each can be tested on the host and heard in the emulator.
    (The first install of it was a stale image: the link failed on a 64-bit divide the pi32v2 toolchain lacks, and
    the old firmware was installed. tests/run_tests.sh now refuses a firmware older than its sources. The STK
    comparison was also made to hold on Linux: STK's dice are the C library's rand(), different per platform.)
+   Confirmed on the unit (2026-11-26): conditions, divide, nudge, swing and note repeat all work.
 7. **MIDI sync:** clock in (EXT / AUTO), clock out, notes out, start / stop / continue.
 8. **Songs and kits:** the SONG screen, chains, 4 songs, 4 kits, the SAVE screen for all three.
 9. **Effects:** chorus, master filter and drive, delay, reverb (in that order, each measured).
