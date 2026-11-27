@@ -36,6 +36,8 @@
 #define TICKS 4u                 /* clock ticks per 16th: a track steps every DIV_TICKS of them */
 #define TICK_UNITS (STEP_UNITS / TICKS)
 #define LOOKAHEAD 2u             /* ticks (half a 16th): a step nudged early is decided this far ahead */
+#define CLK_UNITS (STEP_UNITS / 6u)   /* phase units per MIDI clock (24 PPQN: 6 a 16th) */
+#define CLK_AUTO_SAMPLES (FS / 2)     /* AUTO: a clock within this long means EXT */
 #define SCHQ 4u                  /* steps waiting for their time (nudge, swing), per track */
 static const uint8_t DIV_TICKS[NDIV] = {4, 8, 16, 32, 2, 1};   /* 1/1 1/2 1/4 1/8 2/1 4/1 (DIV_NAME) */
 /* the conditions' A:B (COND_NAME): play on loop A of every B; 0: not an A:B */
@@ -96,6 +98,18 @@ static struct {
     volatile uint8_t sel;        /* the selected track: MIDI CCs 2 / 4 / 11 / 1 set its parameters */
     volatile uint8_t next_req;   /* the pattern to change to, + 1 (0: none): at the next bar line, or at once when stopped */
     volatile uint8_t fill;       /* ARP held: FILL conditions true, and held pads repeat */
+    /* MIDI clock: following (EXT, AUTO while it arrives) and sending (INT, CLOCK OUT) */
+    uint32_t samples;            /* samples since boot (the clock's intervals) */
+    uint32_t clk_last;           /* samples at the last F8 */
+    uint32_t clk_seen;           /* samples since the last F8 (capped) */
+    uint32_t clk_iv_q8;          /* the smoothed interval between F8s, samples x 256 (0: not measured yet) */
+    uint32_t ext_rate_q8;        /* the tempo they make: phase units a sample (BPM x 2), x 256 */
+    int32_t clk_budget;          /* phase units the clock has granted and the sequencer not yet used (EXT) */
+    uint32_t clk_out_acc;        /* INT: phase units towards the next F8 sent */
+    uint32_t spp_tick;           /* a Song Position Pointer: where FB continues (ticks), 0xFFFFFFFF none */
+    uint8_t ext;                 /* following an external clock now */
+    volatile uint8_t ext_pub;
+    volatile uint16_t ext_bpm2_pub;   /* the external tempo, BPM x 2 (the header) */
     volatile int32_t master_q8;  /* the MASTER pot, 0..256 */
     /* ISR -> main loop */
     volatile uint8_t running_pub;
@@ -105,7 +119,17 @@ static struct {
     volatile uint32_t active_pub;
     volatile uint8_t last_midi;     /* the last MIDI note-on received, 0 = none */
     volatile uint16_t last_amp[NT]; /* each track's last hit's amplitude x 256 (the ratchet ramps, tests) */
-} snd = {.master_q8 = 256, .dice = 0x6A09E667u};
+} snd = {.master_q8 = 256, .dice = 0x6A09E667u, .clk_seen = CLK_AUTO_SAMPLES, .spp_tick = 0xFFFFFFFFu};
+
+/* the tempo now, BPM x 2: the pattern's, or the external clock's while following it */
+static uint32_t cur_bpm2(void)
+{
+    uint32_t b;
+    if (!snd.ext || !snd.ext_rate_q8)
+        return pat_bpm2();
+    b = (snd.ext_rate_q8 + 128u) >> 8;
+    return b < 20u ? 20u : b > 960u ? 960u : b;  /* (10..480 BPM: the divisions below stay sane) */
+}
 
 static void voice_silence(uint32_t t)            /* everything back to zero (the dice and the coefficients stay) */
 {
@@ -129,6 +153,9 @@ static void snd_init(void)
         snd.v[t].fq = FQ_NONE;
         voice_silence(t);
     }
+    snd.spp_tick = 0xFFFFFFFFu;                  /* no song position yet */
+    snd.clk_seen = CLK_AUTO_SAMPLES;             /* no clock yet (AUTO: internal) */
+    snd.clk_iv_q8 = snd.ext_rate_q8 = 0;
 }
 
 /* -2 r cos(2 pi f / FS), Q29, for f in Hz Q16 and r in Q30: SK_COS (cos over 0..pi in 2048 steps) interpolated */
@@ -288,7 +315,7 @@ static __attribute__((noinline)) void step_hit(uint32_t t, const step_t *s, uint
     voice_hit(t, rat_amp(a, 0, n, st_ramp(s)));
     if (n > 1u) {
         snd.rat_mask |= 1u << t;
-        snd.rat_gap[t] = TICK_UNITS * per / pat_bpm2() / n;     /* (the step: per ticks of TICK_UNITS / (BPM x 2)) */
+        snd.rat_gap[t] = TICK_UNITS * per / cur_bpm2() / n;     /* (the step: per ticks of TICK_UNITS / (BPM x 2)) */
         snd.rat_wait[t] = (int32_t)snd.rat_gap[t];
         snd.rat_amp[t] = (uint16_t)a;
         snd.rat_k[t] = 1;
@@ -347,7 +374,7 @@ static void step_eval(uint32_t t, uint32_t k, uint32_t ahead, uint32_t solo)
     int32_t ts, d;
     if (!(s->f & ST_TRIG) || !audible(t, solo) || !cond_ok(st_cond(s), k / len) || !step_chance(s))
         return;
-    ts = (int32_t)(TICK_UNITS / pat_bpm2());     /* samples per tick */
+    ts = (int32_t)(TICK_UNITS / cur_bpm2());     /* samples per tick */
     d = (int32_t)ahead * ts + st_nudge(s) * ts * (int32_t)TICKS / 12;
     if (per >= TICKS && (k & 1u) && pat_swing() > 50u)
         d += ((int32_t)pat_swing() - 50) * (int32_t)per * ts / 50;
@@ -438,7 +465,7 @@ static int32_t rep_gap(void)                     /* note repeat: samples between
 {
     static const uint8_t NUM[NREP] = {2, 1, 1, 2}, DEN[NREP] = {1, 1, 2, 3};   /* 1/8 1/16 1/32 1/16T, in 16ths */
     uint32_t r = set.rep_rate < NREP ? set.rep_rate : 1u;
-    return (int32_t)(STEP_UNITS / pat_bpm2() * NUM[r] / DEN[r]);
+    return (int32_t)(STEP_UNITS / cur_bpm2() * NUM[r] / DEN[r]);
 }
 
 static __attribute__((noinline)) void rat_block(uint32_t n)   /* the ratchets' repeats due in this block */
@@ -495,13 +522,62 @@ static __attribute__((noinline)) void rep_block(uint32_t n, uint32_t keys)   /* 
     }
 }
 
+static void clk_start(uint32_t from_tick)       /* running from a tick (0: step 1, its first tick at once) */
+{
+    snd.running = 1;
+    sch_clear();
+    snd.tick = from_tick;
+    snd.phase = TICK_UNITS;
+}
+
+/* F8 clock, FA start, FB continue, FC stop, F2 song position (16ths): followed while EXT (CLOCK EXT, or AUTO with a
+ * clock in the last half second). The tempo is the smoothed interval between F8s; each F8 grants one clock's worth
+ * of phase, so the sequencer runs smoothly at that tempo but never more than a clock ahead (clk_block) */
+static __attribute__((noinline)) void clk_msg(uint32_t b, uint32_t spp)
+{
+    if (b == 0xF8u) {
+        uint32_t iv = snd.samples - snd.clk_last;
+        snd.clk_last = snd.samples;
+        if (iv > (uint32_t)FS / 4u)              /* the first clock, or after a pause (< 10 BPM): not an interval */
+            snd.clk_iv_q8 = 0;
+        else if (!snd.clk_iv_q8)
+            snd.clk_iv_q8 = iv << 8;             /* the first interval */
+        else                                     /* smoothed over ~16 clocks (blocks quantize an interval) */
+            snd.clk_iv_q8 = snd.clk_iv_q8 + (iv << 4) - (snd.clk_iv_q8 >> 4);
+        snd.clk_seen = 0;
+        if (snd.clk_iv_q8 >= 256u)               /* units a sample = CLK_UNITS / interval, x 256 (32-bit) */
+            snd.ext_rate_q8 = (CLK_UNITS * 256u / (snd.clk_iv_q8 >> 4)) << 4;
+        if (snd.ext && snd.running)
+            snd.clk_budget += (int32_t)CLK_UNITS;
+        return;
+    }
+    if (!snd.ext)
+        return;                                  /* (the transport only while following) */
+    if (b == 0xFAu) {
+        clk_start(0);
+        snd.clk_budget = 0;
+    } else if (b == 0xFBu) {
+        clk_start(snd.spp_tick != 0xFFFFFFFFu ? snd.spp_tick         /* the song position, else the next 16th */
+                                              : (snd.tick + TICKS - 1u) / TICKS * TICKS);   /* (MIDI counts 16ths) */
+        snd.spp_tick = 0xFFFFFFFFu;
+        snd.clk_budget = 0;
+    } else if (b == 0xFCu)
+        snd.running = 0;
+    else if (b == 0xF2u)                         /* (a 16th each: our ticks, within the pattern) */
+        snd.spp_tick = (spp % NSTEP) * TICKS;
+}
+
 static __attribute__((noinline)) void snd_midi(uint32_t pkt, uint32_t src)
 {
     uint32_t st = (pkt >> 8) & 0xF0u, ch = (pkt >> 8) & 0x0Fu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu;
     if (pkt == MIDI_LOST || (src == 2u && !set.trs_in))
         return;                                  /* (no note-offs to lose: the models decay on their own) */
-    if (st < 0x80u || st >= 0xF0u || (set.midi_ch && ch != set.midi_ch - 1u))
-        return;                                  /* the clock comes in milestone 7 */
+    if (st == 0xF0u) {                           /* system: the clock, the transport, the song position */
+        clk_msg((pkt >> 8) & 0xFFu, d1 | d2 << 7);
+        return;
+    }
+    if (st < 0x80u || (set.midi_ch && ch != set.midi_ch - 1u))
+        return;
     if (st == 0x90u && d2) {
         snd.last_midi = (uint8_t)d1;
         if (d1 >= set.base_note && d1 - set.base_note < NT)
@@ -646,6 +722,7 @@ static void app_audio(int32_t *out, uint32_t n)
         snd.silence_req = 1;
         snd.next_req = 0;
     }
+    snd.ext = set.clock == CLK_EXT || (set.clock == CLK_AUTO && snd.clk_seen < CLK_AUTO_SAMPLES);
     while (midi_in_take(&pkt, &src))
         snd_midi(pkt, src);
     if (snd.silence_req) {
@@ -657,13 +734,18 @@ static void app_audio(int32_t *out, uint32_t n)
     if (snd.run_req) {
         uint32_t r = snd.run_req;
         snd.run_req = 0;
-        if (r == 2u) {
+        if (snd.ext)
+            ;                                    /* following a clock: the master starts and stops */
+        else if (r == 2u) {
+            if (snd.running && set.clock_out)
+                midi_out(0xFCu, 0, 0);
             snd.running = 0;
         } else if (r == 3u || !snd.running) {
-            snd.running = 1;
-            sch_clear();
-            snd.tick = 0;
-            snd.phase = TICK_UNITS;              /* the first tick at once */
+            clk_start(0);                        /* the first tick at once */
+            if (set.clock_out) {
+                midi_out(0xFAu, 0, 0);           /* start, and its first clock at once */
+                snd.clk_out_acc = CLK_UNITS;
+            }
         }
     }
     if (snd.next_req && !snd.running) {          /* stopped: the queued pattern now */
@@ -687,8 +769,19 @@ static void app_audio(int32_t *out, uint32_t n)
     }
     if (snd.rep_mask)
         rep_block(n, keys);
-    if (snd.running) {
+    if (snd.running && snd.ext) {                /* following: at the clock's tempo, never more than a clock ahead */
+        uint32_t adv = (snd.ext_rate_q8 ? snd.ext_rate_q8 : pat_bpm2() << 8) * n >> 8;   /* (not measured yet: ours) */
+        if (snd.clk_budget > 2 * (int32_t)CLK_UNITS) {   /* behind by more than a clock: catch up */
+            snd.phase += (uint32_t)snd.clk_budget - CLK_UNITS;
+            snd.clk_budget = (int32_t)CLK_UNITS;
+        }
+        if ((int32_t)adv > snd.clk_budget)
+            adv = snd.clk_budget > 0 ? (uint32_t)snd.clk_budget : 0u;
+        snd.clk_budget -= (int32_t)adv;
+        snd.phase += adv;
+    } else if (snd.running)
         snd.phase += pat_bpm2() * n;
+    if (snd.running) {
         while (snd.phase >= TICK_UNITS) {
             snd.phase -= TICK_UNITS;
             seq_tick();
@@ -700,6 +793,19 @@ static void app_audio(int32_t *out, uint32_t n)
     } else if (snd.sch_mask | snd.rat_mask)
         sch_clear();                             /* stopped: nothing left over */
     snd.running_pub = snd.running;
+    if (!snd.ext && set.clock_out) {             /* clock out, running or not: a slave always knows the tempo */
+        snd.clk_out_acc += pat_bpm2() * n;
+        while (snd.clk_out_acc >= CLK_UNITS) {
+            snd.clk_out_acc -= CLK_UNITS;
+            midi_out(0xF8u, 0, 0);
+        }
+    }
+    if (!snd.running)
+        snd.clk_budget = 0;
+    snd.samples += n;
+    snd.clk_seen = snd.clk_seen + n > CLK_AUTO_SAMPLES ? CLK_AUTO_SAMPLES : snd.clk_seen + n;
+    snd.ext_pub = snd.ext;
+    snd.ext_bpm2_pub = (uint16_t)cur_bpm2();
     for (t = 0; t < NT; t++)                     /* notes out: the note-offs due */
         if (snd.note_off[t] && !--snd.note_off[t])
             midi_out(0x80u | snd.out_ch, snd.out_note[t], 0);

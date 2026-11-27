@@ -262,12 +262,19 @@ static void draw_head(void)                      /* HOME's top line: pattern, qu
         x = cv_text_r(x, 4, &AF_S, "MUTE", T_MID, T_BG) - 6;
     if (ui.mode)
         x = cv_text_r(x, 4, &AF_S, "STEP", T_MID, T_BG) - 6;
-    pv_text(b, sizeof b, &PP[PG_TIME][0], (int32_t)pat_bpm2());   /* "120 BPM", or "120" when crowded */
-    gap = x - left - 8;
-    if (text_w(&AF_S, b) > gap) {
-        fmt_int(b, (int32_t)pat_bpm2() / 2);
-        if (text_w(&AF_S, b) > gap)
-            b[0] = 0;
+    {   /* "120 BPM" (EXT: the clock's, "EXT 120 BPM"), or just the number when crowded */
+        uint32_t bpm2 = snd.ext_pub ? snd.ext_bpm2_pub : pat_bpm2();
+        pv_text(t, sizeof t, &PP[PG_TIME][0], (int32_t)bpm2);
+        str_cpy(b, snd.ext_pub ? "EXT " : "", sizeof b);
+        cat(b, t, sizeof b);
+        gap = x - left - 8;
+        if (text_w(&AF_S, b) > gap) {
+            str_cpy(b, snd.ext_pub ? "EXT " : "", sizeof b);
+            fmt_int(t, (int32_t)bpm2 / 2);
+            cat(b, t, sizeof b);
+            if (text_w(&AF_S, b) > gap)
+                b[0] = 0;
+        }
     }
     if (b[0])
         cv_text_in(left + 4, 4, x - left - 4, &AF_S, b, T_TEXT, T_BG);
@@ -823,6 +830,7 @@ static void ui_draw(void)
     }
     h = fnv(fnv(fnv(fnv(fnv(fnv(FNV0, pat_index()), ui.queued ? ui.queued * 2u + ((fm1_ms / 250u) & 1u) : 0u),
                         pat_bpm2()), snd.running_pub), ui.rec), ui.mode);
+    h = fnv(fnv(h, snd.ext_pub), snd.ext_pub ? snd.ext_bpm2_pub : 0u);
     h = fnv(fnv(fnv(h, (uint32_t)panel_held(B_ARP)), solo_any()), any_mute());
     if (h != ui.sig[0])
         draw_head();
@@ -1122,6 +1130,10 @@ static void button_press(uint32_t b)
     }
     switch (b) {
     case B_PLAY:
+        if (snd.ext_pub) {                       /* following a MIDI clock: its master starts and stops */
+            msg("CLOCK EXT: THE MASTER PLAYS");
+            break;
+        }
         if (fm1_ms - ui.play_tap_ms < DTAP_MS) {
             snd.run_req = 3;
             msg("RESTART");

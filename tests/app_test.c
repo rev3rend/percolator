@@ -649,6 +649,48 @@ static void seq_reset(void)                      /* stopped, an empty pattern, s
         voice_silence(t);
 }
 
+
+/* render with a MIDI clock coming in at bpm (0: none), block by block; hits on track t into at[] */
+static uint32_t clock_run(uint32_t bpm, uint32_t frames_, uint32_t t, uint32_t *at, uint32_t max)
+{
+    static double next;                          /* the next clock's time, carried across calls */
+    uint32_t i, n = 0;
+    uint8_t h = snd.hits[t];
+    double iv = bpm ? FS * 60.0 / (bpm * 24.0) : 0.0;
+    if (next < 0.0 || !bpm)
+        next = 0.0;
+    for (i = 0; i < frames_ / CTL; i++) {
+        if (bpm) {
+            while (next <= (double)CTL) {
+                host_midi(0xF8, 0, 0);
+                next += iv;
+            }
+            next -= CTL;
+        }
+        host_render(buf, CTL);
+        while (snd.hits[t] != h) {
+            h++;
+            if (n < max)
+                at[n] = i * CTL;
+            n++;
+        }
+    }
+    return n;
+}
+
+static uint32_t out_count(uint32_t status, uint32_t *first)   /* drain MIDI out: how many of status, the first one */
+{
+    uint32_t pkt, n = 0;
+    *first = 0;
+    while (host_midi_out(&pkt)) {
+        uint32_t b = (pkt >> 8) & 0xFFu;
+        if (!*first)
+            *first = b;
+        n += b == status;
+    }
+    return n;
+}
+
 static void sound(void)
 {
     uint32_t t, pkt, h0;
@@ -1054,6 +1096,95 @@ static void sound(void)
             set.rep_rate = 1;
         }
         seq_reset();
+    }
+    {   /* milestone 7: MIDI clock out (INT) and in (EXT, AUTO) */
+        uint32_t at[64], n, first, k;
+        seq_reset();
+        for (k = 0; k < NSTEP; k++)
+            pat.t[0].s[k].f = ST_TRIG;
+        set.clock = CLK_INT;
+        set.clock_out = 1;
+        out_count(0, &first);
+        host_render(buf, 44096);
+        n = out_count(0xF8, &first);
+        check("clock out: 48 clocks a second at 120 BPM (24 PPQN), stopped too", n >= 47u && n <= 49u);
+        snd.run_req = 1;
+        host_render(buf, 64);
+        n = out_count(0xF8, &first);
+        check("clock out: PLAY sends start (FA) first, then a clock", first == 0xFAu && n >= 1u);
+        snd.run_req = 2;
+        host_render(buf, 64);
+        check("clock out: stop sends FC", out_count(0xFC, &first) == 1u);
+        set.clock_out = 0;
+        host_render(buf, 22048);
+        check("clock out off: no clock", out_count(0xF8, &first) == 0u);
+
+        set.clock = CLK_EXT;                     /* following */
+        seq_reset();
+        for (k = 0; k < NSTEP; k++)
+            pat.t[0].s[k].f = ST_TRIG;
+        clock_run(120, 4096, 0, at, 64);         /* the clock runs; nothing plays before a start */
+        check("EXT: a clock alone does not start", !snd.running_pub);
+        host_midi(0xFA, 0, 0);
+        n = clock_run(120, 88192 - 64, 0, at, 64);
+        check("EXT 120 BPM: start (FA), 16 steps in 2 s", n == 16u);
+        check("EXT 120 BPM: the steps evenly spaced (~5512)", n == 16u && abs((int)(at[15] - at[1]) - 14 * 5512) <= 200);
+        n = clock_run(150, 88192, 0, at, 64);
+        check("EXT 150 BPM: 20 steps in 2 s (the tempo followed)", n >= 19u && n <= 21u);
+        check("EXT: the header's tempo is the clock's (150 BPM, the pattern's 120)",
+              abs((int)snd.ext_bpm2_pub - 300) <= 3 && snd.ext_pub);
+        {   /* a ratchet follows the clock's tempo: x2 at 150 BPM, its repeat half a 16th (2205) after the hit */
+            uint32_t j;
+            for (j = 0; j < NSTEP; j++)
+                pat.t[0].s[j] = (step_t){0};
+            pat.t[0].s[(snd.pos_pub[0] + 2u) % 16u].f = ST_TRIG;
+            pat.t[0].s[(snd.pos_pub[0] + 2u) % 16u].rat = 1u;   /* x2 */
+            n = clock_run(150, 22048, 0, at, 64);
+            check("EXT: a ratchet's repeats at the clock's tempo (half a 16th at 150 BPM: 2205)",
+                  n == 2u && abs((int)(at[1] - at[0]) - 2205) <= 64);
+            for (j = 0; j < NSTEP; j++)
+                pat.t[0].s[j] = (step_t){ST_TRIG, 0, 0, {0, 0, 0, 0}};
+        }
+        n = clock_run(0, 22048, 0, at, 64);      /* the clock pauses: the sequencer waits (a clock ahead at most) */
+        check("EXT: the clock pauses, the steps wait (at most one more)", n <= 1u);
+        n = clock_run(150, 44096, 0, at, 64);
+        check("EXT: the clock resumes, so do the steps", n >= 8u);
+        host_midi(0xFC, 0, 0);
+        n = clock_run(150, 22048, 0, at, 64);
+        check("EXT: stop (FC)", !snd.running_pub && n == 0u);
+        {
+            uint32_t p0 = snd.pos_pub[0];
+            host_midi(0xFB, 0, 0);
+            clock_run(150, 64, 0, at, 64);
+            check("EXT: continue (FB) goes on from where it stopped", snd.running_pub && snd.pos_pub[0] == (p0 + 1u) % 16u);
+            host_midi(0xFC, 0, 0);
+            host_midi(0xF2, 8, 0);               /* song position: the 8th 16th */
+            host_midi(0xFB, 0, 0);
+            clock_run(150, 64, 0, at, 64);
+            check("EXT: song position 8, then continue: from step 9", snd.pos_pub[0] == 8u);
+        }
+        host_midi(0xFC, 0, 0);
+        clock_run(150, 64, 0, at, 64);
+        set.clock_out = 1;
+        out_count(0, &first);
+        clock_run(150, 22048, 0, at, 64);
+        check("EXT: no clock sent while following one", out_count(0xF8, &first) == 0u);
+        set.clock_out = 0;
+        snd.ext_pub = 1;                         /* (as the ISR left it) */
+        press(B_PLAY);
+        clock_run(150, 64, 0, at, 64);
+        check("EXT: PLAY does not start (the master plays)", !snd.running_pub && strstr(ui.msg, "CLOCK EXT") != 0);
+
+        set.clock = CLK_AUTO;                    /* AUTO: EXT while a clock arrives */
+        clock_run(120, 4096, 0, at, 64);
+        check("AUTO: a clock arriving: following it", snd.ext_pub == 1u);
+        clock_run(0, 26496, 0, at, 64);          /* 0.6 s without */
+        check("AUTO: no clock for half a second: the internal clock", snd.ext_pub == 0u);
+        snd.run_req = 1;
+        n = clock_run(0, 44096 - 64, 0, at, 64);
+        check("AUTO without a clock: PLAY runs at the pattern's tempo", n == 8u);
+        seq_reset();
+        set.clock = CLK_AUTO;
     }
     while (host_midi_out(&pkt))
         ;

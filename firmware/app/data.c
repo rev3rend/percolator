@@ -373,8 +373,8 @@ static const param_t PP[NPAGES][4] = {
     {{"FILTER", 0, 100, K_OFF50, 0, 0}, {"RESONANCE", 0, 100, K_PCT, 0, 0},
      {"DRIVE", 0, 100, K_PCT, 0, 0}, {"MASTER", 0, 100, K_NUM, 1, 0}},
     {{"MIDI CHANNEL", 0, 16, K_CH, 1, 0}, {"BASE NOTE", 24, 104, K_NOTE, 1, 0},
-     {"CLOCK", 0, 2, K_LIST, 0, CLOCK_NAME}, {"TRS MIDI IN", 0, 1, K_ONOFF, 1, 0}},
-    {{"CLOCK OUT", 0, 1, K_ONOFF, 0, 0}, {"NOTES OUT", 0, 1, K_ONOFF, 1, 0},
+     {"CLOCK", 0, 2, K_LIST, 1, CLOCK_NAME}, {"TRS MIDI IN", 0, 1, K_ONOFF, 1, 0}},
+    {{"CLOCK OUT", 0, 1, K_ONOFF, 1, 0}, {"NOTES OUT", 0, 1, K_ONOFF, 1, 0},
      {"CPU LOAD", 0, 100, K_LOAD, 1, 0}, {"CPU PEAK", 0, 100, K_PEAK, 1, 0}},
 };
 

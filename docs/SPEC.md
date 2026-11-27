@@ -263,8 +263,17 @@ A one-line overlay for 1.5 s: saves, pattern queued, clock source changes, "SOON
 - **Pattern change** queued to the end of the pattern (the longest track's 16 steps) while running.
 - **Songs:** 4 songs of up to 64 entries (pattern 1..16, repeats 1..16); song playback follows the chain and stops or
   loops at the end (a song setting).
-- **MIDI clock:** INT (sends clock out if enabled), EXT (follows 24 PPQN in, start / stop / continue, song position
-  pointer at least for start), AUTO (EXT while a clock arrives, INT otherwise).
+- **MIDI clock** (GLOBAL: CLOCK INT / EXT / AUTO; GLOBAL 2: CLOCK OUT):
+  - EXT follows 24 PPQN in (USB or TRS): the tempo is the smoothed interval between clocks (~16 clocks), and the
+    sequencer runs smoothly at it but locked: each clock grants one clock's worth of time, so it never runs more than
+    a clock ahead (a paused clock pauses the steps) and catches up at once if it falls behind. Swing, nudge, ratchets
+    and note repeat follow the clock's tempo; the header shows "EXT" and that tempo. FA starts from step 1, FC stops,
+    FB continues from the next 16th (or from a song position pointer, F2, in 16ths). The FM-1's PLAY does not start
+    while following ("CLOCK EXT: THE MASTER PLAYS"). An interval longer than 1/4 s (a pause) is not measured; until
+    two clocks have been, the pattern's tempo runs.
+  - AUTO is EXT while a clock has arrived in the last half second, INT otherwise.
+  - INT with CLOCK OUT on sends 24 PPQN over USB all the time (a slave always knows the tempo), FA at PLAY (and a
+    clock at once), FC at stop. Nothing is sent while following (no loops).
 
 ## What is stored
 
@@ -289,9 +298,9 @@ ignored and replaced by defaults; every value is range-checked on load.
   ignore what comes from it):** notes on the chosen channel: base note + 0..22 trigger tracks
   1..23 (default base 53, the FM-1's own keys F3..D#5), velocity → energy; CC 2 / 11 / 4 / 1 set the selected
   track's (or, with a per-track channel mode later, a track's) energy, decay, objects, frequency (STK's numbers);
-  MIDI clock, start, stop, continue (and song position pointer) as the clock source says. Note-offs are ignored
+  MIDI clock, start, stop, continue and song position as the clock source says (Timing, "MIDI clock"). Note-offs are ignored
   (the models decay on their own), but an all-notes-off / all-sound-off (CC 123 / 120) silences every track.
-- **Out (USB only):** clock and start / stop / continue when INT and CLOCK OUT is on; every played trig and pad as a
+- **Out (USB only):** clock, start and stop when INT and CLOCK OUT is on; every played trig and pad as a
   note (base note + track, velocity from energy, a short note-off after) when NOTES OUT is on.
 - **Screen reader (fm1-reader):** the FM-1 speaks through the fm1-reader screen reader
   (https://charlesvestal.github.io/fm1-reader/, protocol version 1), as in Solinaesque: USB-MIDI SysEx
@@ -375,7 +384,11 @@ Each can be tested on the host and heard in the emulator.
    the old firmware was installed. tests/run_tests.sh now refuses a firmware older than its sources. The STK
    comparison was also made to hold on Linux: STK's dice are the C library's rand(), different per platform.)
    Confirmed on the unit (2026-11-26): conditions, divide, nudge, swing and note repeat all work.
-7. **MIDI sync:** clock in (EXT / AUTO), clock out, notes out, start / stop / continue.
+7. **MIDI sync (done 2026-11-26):** clock in (EXT / AUTO) with a locked smooth follower, clock out, start / stop /
+   continue / song position, PLAY deferring to the master. Tests drive a clock at 120 and 150 BPM, pause it, stop,
+   continue, set a song position, and check AUTO's fall-back and that nothing is sent while following; each proved
+   against a broken version. (Found by them: a first clock's interval, measured from boot, overflowed; and continue
+   mid-step played nothing until the next step: now it resumes on the next 16th, as MIDI counts.)
 8. **Songs and kits:** the SONG screen, chains, 4 songs, 4 kits, the SAVE screen for all three.
 9. **Effects:** chorus, master filter and drive, delay, reverb (in that order, each measured).
 10. **Accessibility:** fm1-reader (the `app_sysex` hook from Solinaesque, `sr.c`, `speak.c`), the MIDItoSpeech
