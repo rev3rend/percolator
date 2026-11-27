@@ -382,6 +382,11 @@ static void screens(void)
     host_turn(EN_K1, -200);
     host_turn(EN_K2, 300);
     host_frame();
+    {
+        char b[16];
+        pv_text(b, sizeof b, &PP[PG_TRACK][1], 50);
+        check("TRACK page: pan in the middle reads CENTER", str_eq(b, "CENTER"));
+    }
     check("TRACK page: KNOB 1 level, KNOB 2 pan (clamped)", kit.t[18].level == 0u && kit.t[18].pan == 100u);
     kit.t[18].level = 80;
     kit.t[18].pan = 50;

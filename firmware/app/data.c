@@ -469,7 +469,7 @@ static void pv_text(char *b, unsigned max, const param_t *q, int32_t v)   /* a v
     case K_PCT: fmt_int(t, v); str_cpy(b, t, max); cat(b, "%", max); break;
     case K_PAN:
         if (v == 50)
-            str_cpy(b, "CENTRE", max);
+            str_cpy(b, "CENTER", max);
         else {
             str_cpy(b, v < 50 ? "L" : "R", max);
             fmt_int(t, v < 50 ? 50 - v : v - 50);

@@ -211,7 +211,7 @@ static __attribute__((noinline)) void water_drop(uint32_t t, voice_t *v)   /* ST
 {
     uint32_t j = (uint32_t)(((v->seed = v->seed * 1664525u + 1013904223u) >> 16) * 3u >> 16), k = 2;
     uint32_t base = sk_freq(t, 1, v->fq);
-    static const int32_t CENTRE[3] = {49152, 65536, 81920};   /* 0.75, 1.0, 1.25 (Q16) */
+    static const int32_t CENTER[3] = {49152, 65536, 81920};   /* 0.75, 1.0, 1.25 (Q16) */
     v->lvl = v->e;
     if (j == 0u && !v->wg[0])
         k = 0;
@@ -220,7 +220,7 @@ static __attribute__((noinline)) void water_drop(uint32_t t, voice_t *v)   /* ST
     else if (v->wg[2])
         return;
     {
-        int32_t m = CENTRE[k] + (dice_noise(&v->seed) >> 1);   /* + 0.25 x noise (Q16) */
+        int32_t m = CENTER[k] + (dice_noise(&v->seed) >> 1);   /* + 0.25 x noise (Q16) */
         int32_t g = dice_noise(&v->seed);
         v->wf[k] = (uint32_t)((uint64_t)base * (uint32_t)m >> 16);
         v->wg[k] = (g < 0 ? -g : g) << 15;                     /* |noise|, Q30 */
